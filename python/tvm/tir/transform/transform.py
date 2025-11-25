@@ -820,7 +820,7 @@ def LiftThreadBinding():
     return _ffi_api.LiftThreadBinding()  # type: ignore
 
 
-def CompactBufferAllocation(is_strict: bool = True):
+def CompactBufferAllocation(is_strict: bool = True, remove_trivial_dims: bool = True):
     """Compact the buffer access region. by removing the buffer regions
     that are not accessed, i.e. narrowing the buffer shape and adjust
     the access region if necessary.
@@ -868,7 +868,7 @@ def CompactBufferAllocation(is_strict: bool = True):
         The result pass
 
     """
-    return _ffi_api.CompactBufferAllocation(is_strict)  # type: ignore
+    return _ffi_api.CompactBufferAllocation(is_strict, remove_trivial_dims)  # type: ignore
 
 
 def LowerMatchBuffer():

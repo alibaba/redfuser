@@ -546,7 +546,7 @@ BlockRealize BlockizeImpl(const ScheduleState& self, const StmtSRef& loop_sref,
       Block(/*iter_vars=*/std::move(outer_iter_vars),
             /*reads=*/EvalSetRegions(block_subst->reads, inner_iter_dom),
             /*writes=*/EvalSetRegions(block_subst->writes, inner_iter_dom),
-            /*name_hint=*/block_subst->name_hint + "_o",
+            /*name_hint=*/block_subst->name_hint + "_outer",
             /*body=*/MakeLoopNest(inner_realize, loops),
             /*init=*/
             block_subst->init.defined()  //

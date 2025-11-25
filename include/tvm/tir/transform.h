@@ -485,9 +485,11 @@ TVM_DLL Pass LiftThreadBinding();
  *
  * \param is_strict ensure the compacted shape always smaller than the original shape.
  *   otherwise it allows to grow the shape to match actual accessed buffer regions.
+ * \param remove_trivial_dims remove dimensions that become trivial (1) after compacting.
+ *   default is true.
  * \return The pass.
  */
-TVM_DLL Pass CompactBufferAllocation(bool is_strict = true);
+TVM_DLL Pass CompactBufferAllocation(bool is_strict = true, bool remove_trivial_dims = true);
 
 /*!
  * \brief Remove match buffers inside the block. Also, it will validate the binding.

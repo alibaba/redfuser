@@ -3264,7 +3264,7 @@ class Schedule(Object):
 
         if required_buffer_type is not None:
             assert buffer_index_type == required_buffer_type, (
-                f"Expected buffer to be read buffer, "
+                f"Expected buffer to be {required_buffer_type} buffer, "
                 f"but {buffer_obj.name} was a {buffer_index_type} buffer "
                 f"in the specified block"
             )

@@ -777,12 +777,12 @@ class LoopReconstructor : private StmtMutator {
         filtered.push_back(std::move(stmt));
       }
     }
-    ret = SeqStmt(filtered);
-    if (ret->size() == 0) {
+    if (filtered.size() == 0) {
       return Evaluate(0);
-    } else if (ret->size() == 1) {
-      return ret->seq[0];
+    } else if (filtered.size() == 1) {
+      return filtered[0];
     } else {
+      ret = SeqStmt(filtered);
       return ret;
     }
   }
