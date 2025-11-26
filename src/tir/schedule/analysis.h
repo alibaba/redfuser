@@ -499,10 +499,11 @@ bool ContainsOnlyDataParAndReductionBlockIter(const ffi::Array<IterVar>& iters);
  * \brief Check whether the block's reduction block iters are not used to index the block's output
  * buffers
  * \param block The block to be checked
+ * \param reduction_buffers The reduction buffers to be checked
  * \return A boolean indicating whether the block's reduction block iters are not used to index the
  * block's output buffer
  */
-bool ReductionIterNotIndexOutputBuffer(const Block& block);
+bool ReductionIterNotIndexOutputBuffer(const Block& block, ffi::Optional<ffi::Array<Buffer>> reduction_buffers = std::nullopt);
 
 /*!
  * \brief Given a list of reduction identities and a list of reduction combiners, detect the

@@ -522,7 +522,7 @@ bool ContainsOnlyDataParAndReductionBlockIter(const ffi::Array<IterVar>& iters) 
   return true;
 }
 
-bool ReductionIterNotIndexOutputBuffer(const Block& block) {
+bool ReductionIterNotIndexOutputBuffer(const Block& block, ffi::Optional<ffi::Array<Buffer>> reduction_buffers) {
   // Step 1. Collect the reduction block iters.
   std::unordered_set<const VarNode*> reduction_block_iters;
   reduction_block_iters.reserve(block->iter_vars.size());
@@ -533,9 +533,16 @@ bool ReductionIterNotIndexOutputBuffer(const Block& block) {
   }
   // Step 2. Check if the reduction block iters are used to index the output buffer.
   std::unordered_set<const BufferNode*> buffer_written;
-  buffer_written.reserve(block->writes.size());
-  for (const BufferRegion& write_region : block->writes) {
-    buffer_written.insert(write_region->buffer.get());
+  if (reduction_buffers.has_value()) {
+    buffer_written.reserve(reduction_buffers.value().size());
+    for (const Buffer& reduction_buffer : reduction_buffers.value()) {
+      buffer_written.insert(reduction_buffer.get());
+    }
+  } else {
+    buffer_written.reserve(block->writes.size());
+    for (const BufferRegion& write_region : block->writes) {
+      buffer_written.insert(write_region->buffer.get());
+    }
   }
 
   std::unordered_set<const BufferNode*> buffer_allocated;
@@ -568,6 +575,18 @@ bool ReductionIterNotIndexOutputBuffer(const Block& block) {
     const auto* store = obj.as<BufferStoreNode>();
     if (!store) {
       return true;
+    }
+    if (reduction_buffers.has_value()) {
+      bool all_different = true;
+      for (const Buffer& reduction_buffer : reduction_buffers.value()) {
+        if (store->buffer.same_as(reduction_buffer)) {
+          all_different = false;
+          break;
+        }
+      }
+      if (all_different) {
+        return true;
+      }
     }
 
     bool write_is_covered_by_match_buffer =

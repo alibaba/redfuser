@@ -234,9 +234,23 @@ StmtSRef DecomposeReduction(ScheduleState self, const StmtSRef& block_sref,
   }
   // Step 2. After copying block vars, substitute them in init block
   init_block->body = Substitute(block->init.value(), block_var_map);
+  // Collect buffers that are actually written in the init block
+  std::unordered_set<const BufferNode*> init_buffers;
+  if (const auto* init_store = block->init.value().as<BufferStoreNode>()) {
+    init_buffers.insert(init_store->buffer.get());
+  } else if (const auto* seq_init = block->init.value().as<SeqStmtNode>()) {
+    for (const Stmt& stmt : seq_init->seq) {
+      if (const auto* init_store = stmt.as<BufferStoreNode>()) {
+        init_buffers.insert(init_store->buffer.get());
+      }
+    }
+  }
+  // Only add writes for buffers that are actually written in init
   for (const BufferRegion& write : block->writes) {
-    init_block->writes.push_back(
-        BufferRegion(write->buffer, Substitute(write->region, block_var_map)));
+    if (init_buffers.count(write->buffer.get())) {
+      init_block->writes.push_back(
+          BufferRegion(write->buffer, Substitute(write->region, block_var_map)));
+    }
   }
   // Step 3. Scan loops not higher than the specified loop above the reduction block.
   //         If the loop is used in the init block binding, then it is chosen.

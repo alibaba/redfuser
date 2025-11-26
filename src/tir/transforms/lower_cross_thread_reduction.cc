@@ -72,7 +72,8 @@ bool IsBoundToThreadIdx(const ForNode* loop) {
  * \param block The block whose dominant property is to be checked
  * \return A boolean indicating if the block is a dominant block
  */
-bool IsDominantBlock(const Block& scope_block, const Block& block) {
+bool IsDominantBlock(const Block& scope_block, const Block& block,
+                     ffi::Optional<ffi::Array<Buffer>> reduction_buffers) {
   // Step 1. Count the number of writers for each buffer written by the scope block.
   std::unordered_map<const BufferNode*, int> buffer_writer_cnt;
   PreOrderVisit(scope_block->body, [&buffer_writer_cnt](const ObjectRef& obj) {
@@ -85,10 +86,19 @@ bool IsDominantBlock(const Block& scope_block, const Block& block) {
     return true;
   });
   // Step 2. Check whether `block` is the only writer of its outputs.
-  for (const BufferRegion& buffer_region : block->writes) {
-    ICHECK(buffer_writer_cnt.count(buffer_region->buffer.get()));
-    if (buffer_writer_cnt[buffer_region->buffer.get()] != 1) {
-      return false;
+  if (reduction_buffers.has_value()) {
+    for (const Buffer& reduction_buffer : reduction_buffers.value()) {
+      ICHECK(buffer_writer_cnt.count(reduction_buffer.get()));
+      if (buffer_writer_cnt[reduction_buffer.get()] != 1) {
+        return false;
+      }
+    }
+  } else {
+    for (const BufferRegion& buffer_region : block->writes) {
+      ICHECK(buffer_writer_cnt.count(buffer_region->buffer.get()));
+      if (buffer_writer_cnt[buffer_region->buffer.get()] != 1) {
+        return false;
+      }
     }
   }
   return true;
@@ -112,6 +122,21 @@ bool IsReductionBlock(const BlockRealize& realize, const ffi::Map<Var, Range>& l
   if (!block->init.defined()) {
     return false;
   }
+  ffi::Array<Buffer> reduction_buffers;
+  if (const auto* init_store = block->init.as<BufferStoreNode>()) {
+    reduction_buffers.push_back(init_store->buffer);
+  } else if (const auto* seq_init = block->init.as<SeqStmtNode>()) {
+    for (const Stmt& stmt : seq_init->seq) {
+        if (const auto* init_store = stmt.as<BufferStoreNode>()) {
+            reduction_buffers.push_back(init_store->buffer);
+        } else {
+            return false;
+        }
+    }
+  } else {
+    return false;
+  }
+
   // Cond 2. All the block bindings are quasi-affine expressions.
   if (!IsAffineBinding(realize, loop_range_map, analyzer)) {
     return false;
@@ -123,11 +148,11 @@ bool IsReductionBlock(const BlockRealize& realize, const ffi::Map<Var, Range>& l
   }
   // Cond 4. Dominant: the block is the only writer of its output, dominating the reader of its
   // output buffers.
-  if (!IsDominantBlock(scope_block, ffi::GetRef<Block>(block))) {
+  if (!IsDominantBlock(scope_block, ffi::GetRef<Block>(block), reduction_buffers)) {
     return false;
   }
   // Cond 5. The reduction block vars are not used to index the output buffers.
-  return ReductionIterNotIndexOutputBuffer(ffi::GetRef<Block>(block));
+  return ReductionIterNotIndexOutputBuffer(ffi::GetRef<Block>(block), reduction_buffers);
 }
 
 /*!

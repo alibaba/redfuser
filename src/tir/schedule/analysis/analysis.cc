@@ -174,7 +174,8 @@ void CheckSRefHigherOrEqual(const StmtSRef& sref_a, const StmtSRef& sref_b) {
  * \return A boolean indicating if the block is a dominant block.
  */
 bool IsDominantBlock(const ScheduleState& self, const StmtSRef& scope_root_sref,
-                     const StmtSRef& block_sref) {
+                     const StmtSRef& block_sref,
+                     ffi::Optional<ffi::Array<Buffer>> reduction_buffers = std::nullopt) {
   std::unordered_map<Buffer, ffi::Array<StmtSRef>, ObjectPtrHash, ObjectPtrEqual> buffer_writers;
   CheckSRefHigherOrEqual(scope_root_sref, block_sref);
   const BlockNode* maybe_root_block = scope_root_sref->StmtAs<BlockNode>();
@@ -192,11 +193,20 @@ bool IsDominantBlock(const ScheduleState& self, const StmtSRef& scope_root_sref,
     }
   }
   // Check whether the input block is the only writer of its outputs
-  const BlockNode* block = TVM_SREF_TO_BLOCK(block_sref);
-  for (const BufferRegion& write_region : block->writes) {
-    if (buffer_writers.count(write_region->buffer)) {
-      if (buffer_writers.at(write_region->buffer).size() != 1) {
+  if (reduction_buffers.has_value()) {
+    for (const Buffer& reduction_buffer : reduction_buffers.value()) {
+      ICHECK(buffer_writers.count(reduction_buffer));
+      if (buffer_writers.at(reduction_buffer).size() != 1) {
         return false;
+      }
+    }
+  } else {
+    const BlockNode* block = TVM_SREF_TO_BLOCK(block_sref);
+    for (const BufferRegion& write_region : block->writes) {
+      if (buffer_writers.count(write_region->buffer)) {
+        if (buffer_writers.at(write_region->buffer).size() != 1) {
+          return false;
+        }
       }
     }
   }
@@ -312,6 +322,21 @@ int CheckReductionBlockErrorCode(const ScheduleState& self, const StmtSRef& bloc
   if (!block->init.defined()) {
     return 1;
   }
+  ffi::Array<Buffer> reduction_buffers;
+  if (const auto* init_store = block->init.as<BufferStoreNode>()) {
+    reduction_buffers.push_back(init_store->buffer);
+  } else if (const auto* seq_init = block->init.as<SeqStmtNode>()) {
+    for (const Stmt& stmt : seq_init->seq) {
+        if (const auto* init_store = stmt.as<BufferStoreNode>()) {
+            reduction_buffers.push_back(init_store->buffer);
+        } else {
+            return 1;
+        }
+    }
+  } else {
+    return 1;
+  }
+
   // Cond 2. All the block bindings are quasi-affine expressions.
   if (!self->IsAffineBlockBinding(block_sref)) {
     return 2;
@@ -323,11 +348,11 @@ int CheckReductionBlockErrorCode(const ScheduleState& self, const StmtSRef& bloc
   }
   // Cond 4. Dominant: the block is the only writer of its output, dominating the reader of its
   // output buffers.
-  if (!IsDominantBlock(self, scope_root_sref, block_sref)) {
+  if (!IsDominantBlock(self, scope_root_sref, block_sref, reduction_buffers)) {
     return 4;
   }
   // Cond 5. The reduction block vars are not used to index the output buffers.
-  return ReductionIterNotIndexOutputBuffer(ffi::GetRef<Block>(block)) ? 0 : 5;
+  return ReductionIterNotIndexOutputBuffer(ffi::GetRef<Block>(block), reduction_buffers) ? 0 : 5;
 }
 
 bool IsReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,
