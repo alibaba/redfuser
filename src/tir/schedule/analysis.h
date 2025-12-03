@@ -166,6 +166,19 @@ bool IsReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,
  */
 void CheckReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,
                          const StmtSRef& scope_root_sref);
+/*!
+ * \brief Check if the statement is a GEMM statement
+ * \param stmt The statement to be checked
+ * \return A boolean indicating if the statement is a GEMM statement
+ */
+bool IsGemmStmt(const Stmt& stmt);
+
+/*!
+ * \brief Check if the statement is a reduction statement
+ * \param stmt The statement to be checked
+ * \return A boolean indicating if the statement is a reduction statement
+ */
+bool IsReduceStmt(const Stmt& stmt);
 
 /*!
  * \brief Check if the block is a complete block or a reduction block under the scope

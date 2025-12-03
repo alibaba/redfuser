@@ -1182,3 +1182,13 @@ def CanonicalizeLoop():
         The result pass
     """
     return _ffi_api.CanonicalizeLoop()  # type: ignore
+
+def ConvertToTileLangBuiltins():
+    """Convert TIR statements to TileLang builtin function calls.
+
+    Returns
+    -------
+    fpass : tvm.transform.Pass
+        The result pass
+    """
+    return _ffi_api.ConvertToTileLangBuiltins()  # type: ignore

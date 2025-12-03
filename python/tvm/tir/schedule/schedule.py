@@ -3213,10 +3213,11 @@ class Schedule(Object):
         block_name = block_obj.name_hint
 
         def iter_buffers():
-            for i, read in enumerate(block_obj.reads):
-                yield "read", i, read.buffer
             for i, write in enumerate(block_obj.writes):
                 yield "write", i, write.buffer
+            for i, read in enumerate(block_obj.reads):
+                yield "read", i, read.buffer
+
 
         if isinstance(buffer, int):
             buffer = (required_buffer_type, buffer)

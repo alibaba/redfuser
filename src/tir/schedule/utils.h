@@ -431,6 +431,73 @@ void TranslateAddOutputRVs(const ffi::Array<Any>& old_outputs, const ffi::Array<
  */
 int GetNumValidInstructions(const ffi::Array<Instruction>& insts, bool remove_postproc);
 
+/*!
+ * \brief Collect all expressions of a specific type from a PrimExpr.
+ * \tparam T The type of the expression to collect
+ * \param expr The expression to traverse
+ * \return Array of collected expressions
+ */
+template <typename RefType>
+inline ffi::Array<RefType> CollectExprs(const PrimExpr& expr) {
+  using NodeType = typename RefType::ContainerType;
+  ffi::Array<RefType> exprs;
+  PostOrderVisit(expr, [&](const ObjectRef& node) {
+    if (const NodeType* t = node.as<NodeType>()) {
+      exprs.push_back(ffi::GetRef<RefType>(t));
+    }
+  });
+  return exprs;
+}
+
+/*
+ * \brief Get the operands of a binary operation
+ * \param expr The binary operation expression
+ * \return The operands of the binary operation
+ */
+inline ffi::Tuple<PrimExpr, PrimExpr> GetBinaryOpOperands(const PrimExpr& expr) {
+#define TVM_TRY_GET_BINARY_OP_OPERANDS(OpNode) \
+  if (auto node = expr.as<OpNode>()) return ffi::Tuple<PrimExpr, PrimExpr>{node->a, node->b};
+
+  TVM_TRY_GET_BINARY_OP_OPERANDS(AddNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(SubNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(MulNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(DivNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(ModNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(FloorDivNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(FloorModNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(MinNode)
+  TVM_TRY_GET_BINARY_OP_OPERANDS(MaxNode)
+
+#undef TVM_TRY_GET_BINARY_OP_OPERANDS
+
+  TVM_FFI_THROW(TypeError) << "Expected a binary operation, but got " << expr->GetTypeKey();
+}
+
+inline bool IsBinaryOp(const PrimExpr& expr) {
+  return expr.as<AddNode>() || expr.as<SubNode>() || expr.as<MulNode>() || expr.as<DivNode>() ||
+         expr.as<ModNode>() || expr.as<FloorDivNode>() || expr.as<FloorModNode>() ||
+         expr.as<MinNode>() || expr.as<MaxNode>();
+}
+
+inline int GetReduceDim(const ffi::Array<PrimExpr>& target_indices,
+                        const ffi::Array<PrimExpr>& operand_indices) {
+  size_t size1 = target_indices.size();
+  size_t size2 = operand_indices.size();
+  if (size1 != (size2 - 1)) return -1;
+  int jump = 0;
+  int reduce_dim = -1;
+  for (size_t i = 0; i < size1; i++) {
+    if (!tvm::StructuralEqual()(target_indices[i], operand_indices[i + jump])) {
+      reduce_dim = (int)(i + jump);
+      jump += 1;
+      if (jump > 1) return -1;
+    }
+  }
+  if (reduce_dim == -1) {
+    reduce_dim = (int)size1;
+  }
+  return reduce_dim;
+}
 }  // namespace tir
 }  // namespace tvm
 

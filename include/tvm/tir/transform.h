@@ -775,6 +775,20 @@ TVM_DLL Pass DefaultGPUSchedule();
  */
 TVM_DLL Pass UseAssumeToReduceBranches();
 
+/*!
+ * \brief Convert TIR statements to TileLang builtin function calls.
+ * 
+ * This pass transforms standard TIR constructs into TileLang-specific builtin calls:
+ * - Parallel loops -> tl_parallel(lhs, rhs, ranges...)
+ * - Reduction operations -> tl_reduce(input, output, op, axis, clear)
+ * - GEMM operations -> tl_gemm(A_region, B_region, C_region, transpose_A, transpose_B, ...)
+ * - Simple copy operations -> tl_copy(src_region, dst_region)
+ * - Fill operations -> tl_fill(dst_region, value)
+ * 
+ * \return The Pass.
+ */
+TVM_DLL Pass ConvertToTileLangBuiltins();
+
 }  // namespace transform
 }  // namespace tir
 }  // namespace tvm

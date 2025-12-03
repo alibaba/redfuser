@@ -143,6 +143,7 @@ def normalize_prim_func(sch: tir.Schedule) -> Optional[List[BlockInfo]]:
             return None
     except Exception as e:  # pylint: disable=broad-except
         print(f"Failed to normalize prim func: {e}")
+        return None
 
     def _iter_kind(i: tir.IterVar) -> str:
         return {

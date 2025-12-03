@@ -327,11 +327,11 @@ int CheckReductionBlockErrorCode(const ScheduleState& self, const StmtSRef& bloc
     reduction_buffers.push_back(init_store->buffer);
   } else if (const auto* seq_init = block->init.as<SeqStmtNode>()) {
     for (const Stmt& stmt : seq_init->seq) {
-        if (const auto* init_store = stmt.as<BufferStoreNode>()) {
-            reduction_buffers.push_back(init_store->buffer);
-        } else {
-            return 1;
-        }
+      if (const auto* init_store = stmt.as<BufferStoreNode>()) {
+        reduction_buffers.push_back(init_store->buffer);
+      } else {
+        return 1;
+      }
     }
   } else {
     return 1;
@@ -366,6 +366,72 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       "tir.schedule.IsReductionBlock", [](Schedule sch, BlockRV block_rv, BlockRV scope_block_rv) {
         return IsReductionBlock(sch->state(), sch->GetSRef(block_rv), sch->GetSRef(scope_block_rv));
       });
+}
+
+bool IsGemmStmt(const Stmt& stmt) {
+  StructuralEqual equal;
+  if (!stmt.as<BufferStoreNode>()) return false;
+  auto buffer_store = Downcast<BufferStore>(stmt);
+  if (buffer_store->indices.size() < 2) return false;
+  auto C = BufferLoad(buffer_store->buffer, buffer_store->indices);
+  if (!buffer_store->value.as<AddNode>()) return false;
+  auto add = Downcast<Add>(buffer_store->value);
+  if (!add->a.as<BufferLoadNode>()) return false;
+  auto C_ = Downcast<BufferLoad>(add->a);
+  if (!equal(C_, C)) return false;
+  if (!add->b.as<MulNode>()) return false;
+  auto mul = Downcast<Mul>(add->b);
+  auto A_buffer_loads = CollectExprs<BufferLoad>(mul->a);
+  auto B_buffer_loads = CollectExprs<BufferLoad>(mul->b);
+  
+  if (A_buffer_loads.size() != 1 || B_buffer_loads.size() != 1) return false;
+  auto A = A_buffer_loads[0];
+  auto B = B_buffer_loads[0];
+  size_t n_dims = C->indices.size();
+  if (A->indices.size() != B->indices.size()) return false;
+  if (n_dims != A->indices.size()) return false;
+  auto M = C->indices[n_dims - 2];
+  auto N = C->indices[n_dims - 1];
+  PrimExpr K;
+  if (equal(A->indices[n_dims - 2], M)) {
+    K = A->indices[n_dims - 1];
+  } else if (equal(A->indices[n_dims - 1], M)) {
+    K = A->indices[n_dims - 2];
+  } else {
+    return false;
+  }
+  if (equal(B->indices[n_dims - 2], K) && equal(B->indices[n_dims - 1], N)) return true;
+  if (equal(B->indices[n_dims - 2], N) && equal(B->indices[n_dims - 1], K)) return true;
+  return false;
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.schedule.IsGemmStmt",
+                        [](const Stmt& stmt) { return IsGemmStmt(stmt); });
+}
+
+bool IsReduceStmt(const Stmt& stmt) {
+  StructuralEqual equal;
+  if (!stmt.as<BufferStoreNode>()) return false;
+  auto buffer_store = Downcast<BufferStore>(stmt);
+  auto target = BufferLoad(buffer_store->buffer, buffer_store->indices);
+  if (!IsBinaryOp(buffer_store->value)) return false;
+  auto [A_expr, B_expr] = GetBinaryOpOperands(buffer_store->value);
+  auto A_buffer_loads = CollectExprs<BufferLoad>(A_expr);
+  auto B_buffer_loads = CollectExprs<BufferLoad>(B_expr);
+  if (A_buffer_loads.size() != 1 || B_buffer_loads.size() != 1) return false;
+  auto A = A_buffer_loads[0];
+  auto B = B_buffer_loads[0];
+  if (!equal(A, target)) return false;
+  if (GetReduceDim(target->indices, B->indices) == -1) return false;
+  return true;
+}
+
+bool IsCopyStmt(const Stmt& stmt) {
+  if (!stmt.as<BufferStoreNode>()) return false;
+  auto buffer_store = Downcast<BufferStore>(stmt);
+  return buffer_store->value.as<BufferLoadNode>();
 }
 
 void CheckReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,

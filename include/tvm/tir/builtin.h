@@ -974,6 +974,24 @@ TVM_DLL const Op& get_active_lane_mask();
 /*! \brief Annotate a predicate not be considered as target condition of loop partition. */
 TVM_DLL const Op& ignore_loop_partition();
 
+/*! \brief TileLang region operation. */
+TVM_DLL const Op& tl_region();
+
+/*! \brief TileLang parallel loop iterator. */
+TVM_DLL const Op& tl_parallel();
+
+/*! \brief TileLang copy operation. */
+TVM_DLL const Op& tl_copy();
+
+/*! \brief TileLang fill operation. */
+TVM_DLL const Op& tl_fill();
+
+/*! \brief TileLang reduce operation. */
+TVM_DLL const Op& tl_reduce();
+
+/*! \brief TileLang GEMM operation. */
+TVM_DLL const Op& tl_gemm();
+
 /*! \brief The kind of structure field info used in intrinsic */
 enum TVMStructFieldKind : int {
   // array head address
