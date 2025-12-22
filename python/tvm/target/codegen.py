@@ -247,3 +247,20 @@ def llvm_version_major(allow_none=False):
         if allow_none:
             return None
         raise RuntimeError("LLVM version is not available, please check if you built TVM with LLVM")
+
+def function_to_tilelang_script(func_name: str, func) -> str:
+    """Convert a PrimFunc to TileLang script.
+    
+    Parameters
+    ----------
+    func_name : str
+        The name of the function in the generated script.
+    func : tvm.tir.PrimFunc
+        The TIR PrimFunc to convert.
+        
+    Returns
+    -------
+    str
+        The generated TileLang script.
+    """
+    return _ffi_api.FunctionToTileLangScript(func_name, func)

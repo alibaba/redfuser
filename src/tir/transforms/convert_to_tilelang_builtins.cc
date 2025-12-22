@@ -45,6 +45,16 @@ namespace tvm {
 
 namespace tir {
 
+PrimExpr Buffer2TL_Region(const Buffer& buffer) {
+  ffi::Array<PrimExpr> args;
+  auto buf_load = BufferLoad(buffer, ffi::Array<PrimExpr>(buffer->shape.size(), IntImm(DataType::Int(32), 0)));
+  args.push_back(buf_load);
+  for (size_t i = 0; i < buffer->shape.size(); i++) {
+    args.push_back(buffer->shape[i]);
+  }
+  return Call(DataType::Void(), builtin::tl_region(), args);
+}
+
 namespace {
 using namespace ffi;
 
@@ -346,7 +356,10 @@ Pass ConvertToTileLangBuiltins() {
 TVM_FFI_STATIC_INIT_BLOCK() {
   namespace refl = tvm::ffi::reflection;
   refl::GlobalDef().def("tir.transform.ConvertToTileLangBuiltins", ConvertToTileLangBuiltins);
+  refl::GlobalDef().def("tir.Buffer2TL_Region", Buffer2TL_Region);
 }
+
+
 
 }  // namespace transform
 }  // namespace tir
