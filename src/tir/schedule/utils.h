@@ -433,7 +433,7 @@ int GetNumValidInstructions(const ffi::Array<Instruction>& insts, bool remove_po
 
 /*!
  * \brief Collect all expressions of a specific type from a PrimExpr.
- * \tparam T The type of the expression to collect
+ * \tparam RefType The type of the expression to collect
  * \param expr The expression to traverse
  * \return Array of collected expressions
  */

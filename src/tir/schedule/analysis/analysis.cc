@@ -384,25 +384,53 @@ bool IsGemmStmt(const Stmt& stmt) {
   auto A_buffer_loads = CollectExprs<BufferLoad>(mul->a);
   auto B_buffer_loads = CollectExprs<BufferLoad>(mul->b);
   
-  if (A_buffer_loads.size() != 1 || B_buffer_loads.size() != 1) return false;
-  auto A = A_buffer_loads[0];
-  auto B = B_buffer_loads[0];
-  size_t n_dims = C->indices.size();
-  if (A->indices.size() != B->indices.size()) return false;
-  if (n_dims != A->indices.size()) return false;
-  auto M = C->indices[n_dims - 2];
-  auto N = C->indices[n_dims - 1];
-  PrimExpr K;
-  if (equal(A->indices[n_dims - 2], M)) {
-    K = A->indices[n_dims - 1];
-  } else if (equal(A->indices[n_dims - 1], M)) {
-    K = A->indices[n_dims - 2];
-  } else {
-    return false;
+  std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> A_indices;
+  std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> B_indices;
+  std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> C_indices(C->indices.begin(), C->indices.end());
+  for (const BufferLoad& A_buffer_load : A_buffer_loads) {
+    for (const PrimExpr& index : A_buffer_load->indices) {
+        A_indices.insert(index);
+    }
   }
-  if (equal(B->indices[n_dims - 2], K) && equal(B->indices[n_dims - 1], N)) return true;
-  if (equal(B->indices[n_dims - 2], N) && equal(B->indices[n_dims - 1], K)) return true;
-  return false;
+  for (const BufferLoad& B_buffer_load : B_buffer_loads) {
+    for (const PrimExpr& index : B_buffer_load->indices) {
+        B_indices.insert(index);
+    }
+  }
+
+  // Helper lambda for set intersection
+  auto SetIntersect = [](const std::unordered_set<PrimExpr, StructuralHash, StructuralEqual>& a,
+                         const std::unordered_set<PrimExpr, StructuralHash, StructuralEqual>& b) {
+    std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> result;
+    for (const auto& elem : a) {
+      if (b.count(elem)) {
+        result.insert(elem);
+      }
+    }
+    return result;
+  };
+
+  // Helper lambda for set difference
+  auto SetDiff = [](const std::unordered_set<PrimExpr, StructuralHash, StructuralEqual>& a,
+                    const std::unordered_set<PrimExpr, StructuralHash, StructuralEqual>& b) {
+    std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> result;
+    for (const auto& elem : a) {
+      if (!b.count(elem)) {
+        result.insert(elem);
+      }
+    }
+    return result;
+  };
+
+  // K = (A ∩ B) - C : reduction dimension, in A and B but not in C
+  auto K = SetDiff(SetIntersect(A_indices, B_indices), C_indices);
+  // M = (A ∩ C) - B : A's non-reduction dimension, in A and C but not in B
+  auto M = SetDiff(SetIntersect(A_indices, C_indices), B_indices);
+  // N = (B ∩ C) - A : B's non-reduction dimension, in B and C but not in A
+  auto N = SetDiff(SetIntersect(B_indices, C_indices), A_indices);
+
+  // GEMM condition: K, M, N must all be non-empty
+  return !K.empty() && !M.empty() && !N.empty();
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {
