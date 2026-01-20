@@ -125,64 +125,106 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
   Stmt CollectBlockIdxBindings(const AttrStmtNode* op,
                                ffi::Array<ffi::Optional<PrimExpr>>& block_dims,
                                ffi::Array<ffi::Optional<Var>>& block_vars) {
-    const Stmt* current_body = &op->body;
-
-    // Process the first AttrStmt
-    if (op->attr_key == tir::attr::thread_extent) {
-      auto iv = Downcast<IterVar>(op->node);
-      auto scope = runtime::ThreadScope::Create(iv->thread_tag);
-      if (scope.rank == 0 && scope.dim_index >= 0 && scope.dim_index < 3) {
-        block_dims.Set(scope.dim_index, op->value);
-        block_vars.Set(scope.dim_index, iv->var);
-      }
-    }
-
-    // Continue collecting from nested AttrStmt nodes
-    while (const auto* nested = current_body->as<AttrStmtNode>()) {
-      if (nested->attr_key == tir::attr::thread_extent) {
-        auto iv = Downcast<IterVar>(nested->node);
-        auto scope = runtime::ThreadScope::Create(iv->thread_tag);
-        if (scope.rank == 0 && scope.dim_index >= 0 && scope.dim_index < 3) {
-          block_dims.Set(scope.dim_index, nested->value);
-          block_vars.Set(scope.dim_index, iv->var);
+    const AttrStmtNode* current = op;
+    while (current != nullptr) {
+      if (current->attr_key == tir::attr::thread_extent) {
+        auto iv = Downcast<IterVar>(current->node);
+        const std::string& thread_tag = iv->thread_tag;
+        int dim_index = thread_tag[thread_tag.size() - 1] - '0';
+        if (dim_index >= 0) {
+          block_dims.Set(dim_index, current->value);
+          block_vars.Set(dim_index, iv->var);
         }
       }
-      current_body = &nested->body;
+      current = current->body.as<AttrStmtNode>();
     }
 
-    return *current_body;
+    // Find the innermost body
+    const Stmt* body = &op->body;
+    while (const auto* nested = body->as<AttrStmtNode>()) {
+      body = &nested->body;
+    }
+    return *body;
   }
 
   Doc VisitStmt_(const AttrStmtNode* op) override {
     if (op->attr_key == tir::attr::thread_extent) {
       auto iv = Downcast<IterVar>(op->node);
-      auto scope = runtime::ThreadScope::Create(iv->thread_tag);
+      const std::string& thread_tag = iv->thread_tag;
 
-      // Only handle blockIdx (rank == 0)
-      if (scope.rank == 0) {
+      // Only handle vblockIdx (virtual blockIdx)
+      if (thread_tag.compare(0, 10, "vblockIdx.") == 0) {
         // Collect all nested blockIdx bindings
-        ffi::Array<ffi::Optional<PrimExpr>> block_dims(3, std::nullopt);  // x, y, z
-        ffi::Array<ffi::Optional<Var>> block_vars(3, std::nullopt);       // x, y, z
+        ffi::Array<ffi::Optional<PrimExpr>> block_dims(10, std::nullopt);
+        ffi::Array<ffi::Optional<Var>> block_vars(10, std::nullopt);
 
         Stmt innermost_body = CollectBlockIdxBindings(op, block_dims, block_vars);
 
         // Visit the innermost body
         auto body_doc = VisitStmt(innermost_body);
 
-        // Build T.Kernel(bx, by, bz) call
-        // Only include dimensions that are defined
-        ffi::Array<ExprDoc> kernel_args;
-        ffi::Array<ExprDoc> var_docs;
-
-        // Add dimensions in x, y, z order
-        for (int i = 0; i < 3; ++i) {
+        // Collect all valid dims and vars in order
+        ffi::Array<PrimExpr> all_dims;
+        ffi::Array<Var> all_vars;
+        for (int i = 0; i < 10; ++i) {
           if (block_dims[i].has_value()) {
-            kernel_args.push_back(VisitExpr(block_dims[i].value()));
-            var_docs.push_back(VisitExpr(block_vars[i].value()));
+            all_dims.push_back(block_dims[i].value());
+            all_vars.push_back(block_vars[i].value());
           }
         }
 
-        // Create the lhs: (var_x, var_y, var_z) or single var
+        // Build T.Kernel(...) call
+        ffi::Array<ExprDoc> kernel_args;
+        ffi::Array<ExprDoc> var_docs;
+        ffi::Array<StmtDoc> final_body = Flatten({body_doc});
+
+        if (all_dims.size() <= 3) {
+          // Use dims and vars directly
+          for (size_t i = 0; i < all_dims.size(); ++i) {
+            kernel_args.push_back(VisitExpr(all_dims[i]));
+            var_docs.push_back(VisitExpr(all_vars[i]));
+          }
+        } else {
+          // First 2 dims stay as-is, merge dims from index 2 onwards
+          kernel_args.push_back(VisitExpr(all_dims[0]));
+          kernel_args.push_back(VisitExpr(all_dims[1]));
+          var_docs.push_back(VisitExpr(all_vars[0]));
+          var_docs.push_back(VisitExpr(all_vars[1]));
+
+          // Merge dims[2], dims[3], ... into a single expression
+          PrimExpr merged_dim = all_dims[2];
+          for (size_t i = 3; i < all_dims.size(); ++i) {
+            merged_dim = merged_dim * all_dims[i];
+          }
+          kernel_args.push_back(VisitExpr(merged_dim));
+
+          // Create a new fused var for lhs[2]
+          std::string fused_var_name =
+              name_supply_->FreshName("fused_" + all_vars[2]->name_hint);
+          ExprDoc fused_var_doc = IdDoc(fused_var_name);
+          var_docs.push_back(fused_var_doc);
+
+          // Build index_to_coordinates call and prepend to body
+          ffi::Array<ExprDoc> original_vars_from_2;
+          ffi::Array<ExprDoc> dims_from_2;
+          for (size_t i = 2; i < all_vars.size(); ++i) {
+            original_vars_from_2.push_back(VisitExpr(all_vars[i]));
+            dims_from_2.push_back(VisitExpr(all_dims[i]));
+          }
+          ExprDoc coord_lhs = TupleDoc(original_vars_from_2);
+          ExprDoc coord_rhs =
+              CallTileLang("index_to_coordinates", {fused_var_doc, ListDoc(dims_from_2)});
+          AssignDoc coord_assign = AssignDoc(coord_lhs, coord_rhs, std::nullopt);
+
+          ffi::Array<StmtDoc> new_body;
+          new_body.push_back(coord_assign);
+          for (auto stmt : final_body) {
+            new_body.push_back(stmt);
+          }
+          final_body = new_body;
+        }
+
+        // Create lhs: single var or tuple
         ffi::Optional<ExprDoc> lhs;
         if (var_docs.size() == 1) {
           lhs = var_docs[0];
@@ -190,11 +232,11 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
           lhs = TupleDoc(var_docs);
         }
 
-        // Create the rhs: T.Kernel(bx, by, bz)
+        // Create rhs: T.Kernel(...)
         ExprDoc rhs = TileLangPrefix("Kernel")->Call(kernel_args);
 
         // Create ScopeDoc: with T.Kernel(...) as (...):
-        return ScopeDoc(lhs, rhs, Flatten({body_doc}));
+        return ScopeDoc(lhs, rhs, final_body);
       }
     }
 
@@ -489,8 +531,16 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
       return OperationDoc(OperationDocNode::Kind::kUSub,
                           {CallTileLang("infinity", {TileLangDataType(op->dtype)})});
     }
-    if (std::isinf(op->value) || op->value == std::numeric_limits<float>::max()) {
+    if (op->value == std::numeric_limits<float>::max()) {
       return CallTileLang("infinity", {TileLangDataType(op->dtype)});
+    }
+    if (std::isinf(op->value)) {
+        if (std::signbit(op->value)) {
+            return OperationDoc(OperationDocNode::Kind::kUSub,
+                                {CallTileLang("infinity", {TileLangDataType(op->dtype)})});
+        } else {
+            return CallTileLang("infinity", {TileLangDataType(op->dtype)});
+        }
     }
     return LiteralDoc::Float(op->value, std::nullopt);
   }
