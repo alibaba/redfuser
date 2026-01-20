@@ -174,3 +174,49 @@ def log_softmax(x, axis=-1):
         lambda *indices: _normalize(max_elem, expsum, *indices),
         attrs={"axis": axis},
     )
+
+
+def softmax_split(x, axis=-1, reduce_max_name="k", reduce_sum_name="k", varargs_names=None):
+    """Compute max and expsum, DON'T do NORM"""
+    shape = x.shape
+    if axis < 0:
+        axis = len(shape) + axis
+    if axis >= len(shape):
+        ValueError("axis parameter should be less than input dim")
+
+    k1 = te.reduce_axis((0, shape[axis]), name=reduce_max_name)
+    k2 = te.reduce_axis((0, shape[axis]), name=reduce_sum_name)
+
+    def insert_reduce_index(indices, reduce_index):
+        return indices[:axis] + (reduce_index,) + indices[axis:]
+
+    def get_non_reduce_indices(indices):
+        return tuple([var for (i, var) in enumerate(indices) if i != axis])
+
+    def _compute_max(*indices):
+        eval_range = insert_reduce_index(indices, k1)
+        return tvm.te.max(x[eval_range], axis=k1)
+
+    def _compute_exp(max_elem, *indices):
+        non_reduce_indices = get_non_reduce_indices(indices)
+        return te.exp(x[indices] - max_elem[non_reduce_indices])
+
+    def _compute_expsum(exp, *indices):
+        eval_range = insert_reduce_index(indices, k2)
+        return te.sum(exp[eval_range], axis=k2)
+
+    # def _normalize(exp, expsum, *indices):
+    #     non_reduce_indices = get_non_reduce_indices(indices)
+    #     return exp[indices] / expsum[non_reduce_indices]
+
+    reduced_shape = tuple([dim for (i, dim) in enumerate(shape) if i != axis])
+    max_elem = te.compute(reduced_shape, _compute_max, name="T_softmax_maxelem", varargs_names=varargs_names)
+
+    exp = te.compute(
+        shape, lambda *indices: _compute_exp(max_elem, *indices), name="T_softmax_exp"
+    )
+    expsum = te.compute(
+        reduced_shape, lambda *indices: _compute_expsum(exp, *indices), name="T_softmax_expsum", varargs_names=varargs_names
+    )
+
+    return exp, expsum

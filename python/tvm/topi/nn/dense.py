@@ -31,6 +31,8 @@ def matmul(
     transpose_b=False,
     auto_scheduler_rewritten_layout="",
     meta_schedule_original_shape=None,
+    reduce_axis_name="k",
+    varargs_names=None
 ):
     """The default implementation of matmul in topi.
 
@@ -116,7 +118,7 @@ def matmul(
         if not isinstance(l, tvm.tir.Var) and int(l) == 1:
             batch_dims_a[idx] = batch_dims_b[idx]
 
-    k = te.reduce_axis((0, reduce_dim_a), name="k")
+    k = te.reduce_axis((0, reduce_dim_a), name=reduce_axis_name)
 
     def compute(*indices):
         batch_indices_a = indices[-len(tensor_a.shape) : -2]
@@ -152,6 +154,7 @@ def matmul(
         name=compute_name,
         tag=compute_tag,
         attrs={"layout_free_placeholders": [tensor_b]},
+        varargs_names=varargs_names
     )
 
     if bias is not None:
