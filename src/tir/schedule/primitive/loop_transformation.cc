@@ -760,7 +760,7 @@ class LoopReconstructor : private StmtMutator {
   }
 
   Stmt VisitStmt_(const ForNode* loop) final {
-    if (ffi::GetRef<For>(loop) == need_remove_loop_.back()) {
+    if (ffi::GetRef<For>(loop) == need_remove_loop_.front()) {
       return new_outer_loop_;
     } else if (std::count(need_remove_loop_.begin(), need_remove_loop_.end(),
                           ffi::GetRef<For>(loop))) {
