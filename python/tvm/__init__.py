@@ -69,6 +69,9 @@ from .contrib import rocm as _rocm, nvcc as _nvcc
 if not _RUNTIME_ONLY:
     from . import relax
 
+# redfuser
+from . import redfuser
+
 # NOTE: This file should be python2 compatible so we can
 # raise proper error message when user run the package using
 # an older version of the python
