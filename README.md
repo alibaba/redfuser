@@ -1,65 +1,36 @@
-<!--- Licensed to the Apache Software Foundation (ASF) under one -->
-<!--- or more contributor license agreements.  See the NOTICE file -->
-<!--- distributed with this work for additional information -->
-<!--- regarding copyright ownership.  The ASF licenses this file -->
-<!--- to you under the Apache License, Version 2.0 (the -->
-<!--- "License"); you may not use this file except in compliance -->
-<!--- with the License.  You may obtain a copy of the License at -->
+# RedFuser
 
-<!---   http://www.apache.org/licenses/LICENSE-2.0 -->
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![ASPLOS 2026](https://img.shields.io/badge/ASPLOS-2026-orange.svg)](https://asplos-conference.org/)
 
-<!--- Unless required by applicable law or agreed to in writing, -->
-<!--- software distributed under the License is distributed on an -->
-<!--- "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY -->
-<!--- KIND, either express or implied.  See the License for the -->
-<!--- specific language governing permissions and limitations -->
-<!--- under the License. -->
+This repository contains the artifact for our ASPLOS 2026 paper: **"RedFuser: An Automatic Operator Fusion Framework for Cascaded Reductions on AI Accelerators"**.
 
-<img src=https://raw.githubusercontent.com/apache/tvm-site/main/images/logo/tvm-logo-small.png width=128/> Open Machine Learning Compiler Framework
-==============================================
-[Documentation](https://tvm.apache.org/docs) |
-[Contributors](CONTRIBUTORS.md) |
-[Community](https://tvm.apache.org/community) |
-[Release Notes](NEWS.md)
+## Overview
 
-Apache TVM is an open machine learning compilation framework,
-following the following principles:
+RedFuser is a novel framework for optimizing cascaded reductions in deep learning compilers. Built on top of [Apache TVM](https://github.com/apache/tvm), RedFuser introduces a series of compiler transformation passes that enable efficient fusion of reduction operations with other computations, particularly targeting modern GPU architectures.
 
-- Python-first development that enables quick customization of machine learning compiler pipelines.
-- Universal deployment to bring models into minimum deployable modules.
+## Getting Started
 
-License
--------
-TVM is licensed under the [Apache-2.0](LICENSE) license.
+Please follow https://tvm.apache.org/docs/install/index.html to install.
 
-Getting Started
----------------
-Check out the [TVM Documentation](https://tvm.apache.org/docs/) site for installation instructions, tutorials, examples, and more.
-The [Getting Started with TVM](https://tvm.apache.org/docs/get_started/overview.html) tutorial is a great
-place to start.
+## Example
 
-Contribute to TVM
------------------
-TVM adopts the Apache committer model. We aim to create an open-source project maintained and owned by the community.
-Check out the [Contributor Guide](https://tvm.apache.org/docs/contribute/).
+For flash-attention example, see [`python/tvm/redfuser/example/flash_attention.py`](python/tvm/redfuser/example/flash_attention.py).
 
-History and Acknowledgement
----------------------------
-TVM started as a research project for deep learning compilation.
-The first version of the project benefited a lot from the following projects:
+## Structure
 
-- [Halide](https://github.com/halide/Halide): Part of TVM's TIR and arithmetic simplification module
- originates from Halide. We also learned and adapted some parts of the lowering pipeline from Halide.
-- [Loopy](https://github.com/inducer/loopy): use of integer set analysis and its loop transformation primitives.
-- [Theano](https://github.com/Theano/Theano): the design inspiration of symbolic scan operator for recurrence.
+```
+redfuser/
+├── python/tvm/redfuser/       # RedFuser Python implementation
+│   ├── transform/             # Core transformation passes
+│   └── example/               # Example workloads
+│ ...
+```
 
-Since then, the project has gone through several rounds of redesigns.
-The current design is also drastically different from the initial design, following the
-development trend of the ML compiler community.
+## License
 
-The most recent version focuses on a cross-level design with TensorIR as the tensor-level representation
-and Relax as the graph-level representation and Python-first transformations.
-The project's current design goal is to make the ML compiler accessible by enabling most
-transformations to be customizable in Python and bringing a cross-level representation that can jointly
-optimize computational graphs, tensor programs, and libraries. The project is also a foundation
-infra for building Python-first vertical compilers for domains, such as LLMs.
+RedFuser is licensed under the [Apache License 2.0](LICENSE).
+
+## Acknowledgments
+
+This project builds upon [Apache TVM](https://github.com/apache/tvm). We thank the TVM community for their excellent infrastructure and support.
