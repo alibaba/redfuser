@@ -9,6 +9,18 @@ This repository contains the artifact for our ASPLOS 2026 paper: **"RedFuser: An
 
 RedFuser is a novel framework for optimizing cascaded reductions in deep learning compilers. Built on top of [Apache TVM](https://github.com/apache/tvm), RedFuser introduces a series of compiler transformation passes that enable efficient fusion of reduction operations with other computations, particularly targeting modern GPU architectures.
 
+## Update
+
+- \[2026-01\]: RedFuser is now avaliable with flash-attention example.
+- \[2025-11\]: 🎉RedFuser is accepted by ASPLOS 2026!
+
+## Roadmap
+
+- [x] flash-attention
+- [ ] flash-decoding
+- [ ] moe-routing
+- [ ] fp8 quant+gemm
+
 ## Getting Started
 
 Please follow https://tvm.apache.org/docs/install/index.html to install.
