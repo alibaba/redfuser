@@ -199,8 +199,7 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
           kernel_args.push_back(VisitExpr(merged_dim));
 
           // Create a new fused var for lhs[2]
-          std::string fused_var_name =
-              name_supply_->FreshName("fused_" + all_vars[2]->name_hint);
+          std::string fused_var_name = name_supply_->FreshName("fused_" + all_vars[2]->name_hint);
           ExprDoc fused_var_doc = IdDoc(fused_var_name);
           var_docs.push_back(fused_var_doc);
 
@@ -475,6 +474,10 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
     return CallTileLang("Cast", {TileLangDataType(op->dtype), VisitExpr(op->value)});
   }
 
+  ExprDoc VisitExpr_(const MaxNode* op) override {
+    return CallTileLang("max", {VisitExpr(op->a), VisitExpr(op->b)});
+  }
+
   ExprDoc VisitExpr_(const AddNode* op) override {
     return OperationDoc(OperationDocNode::Kind::kAdd, {VisitExpr(op->a), VisitExpr(op->b)});
   }
@@ -535,12 +538,12 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
       return CallTileLang("infinity", {TileLangDataType(op->dtype)});
     }
     if (std::isinf(op->value)) {
-        if (std::signbit(op->value)) {
-            return OperationDoc(OperationDocNode::Kind::kUSub,
-                                {CallTileLang("infinity", {TileLangDataType(op->dtype)})});
-        } else {
-            return CallTileLang("infinity", {TileLangDataType(op->dtype)});
-        }
+      if (std::signbit(op->value)) {
+        return OperationDoc(OperationDocNode::Kind::kUSub,
+                            {CallTileLang("infinity", {TileLangDataType(op->dtype)})});
+      } else {
+        return CallTileLang("infinity", {TileLangDataType(op->dtype)});
+      }
     }
     return LiteralDoc::Float(op->value, std::nullopt);
   }
@@ -636,10 +639,7 @@ ffi::String FunctionToTileLangScript(const std::string& func_name, const PrimFun
   // Convert to Python script
   std::string script = DocToPythonScript(func_doc, PrinterConfig());
 
-  // Add import statement at the beginning
-  std::string import_stmt = "import tilelang\nimport tilelang.language as T\n\n";
-
-  return import_stmt + script;
+  return script + "\n\n";
 }
 
 TVM_FFI_STATIC_INIT_BLOCK() {

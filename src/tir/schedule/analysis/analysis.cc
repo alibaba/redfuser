@@ -383,18 +383,30 @@ bool IsGemmStmt(const Stmt& stmt) {
   auto mul = Downcast<Mul>(add->b);
   auto A_buffer_loads = CollectExprs<BufferLoad>(mul->a);
   auto B_buffer_loads = CollectExprs<BufferLoad>(mul->b);
-  
+
   std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> A_indices;
   std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> B_indices;
-  std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> C_indices(C->indices.begin(), C->indices.end());
+  std::unordered_set<PrimExpr, StructuralHash, StructuralEqual> C_indices;
   for (const BufferLoad& A_buffer_load : A_buffer_loads) {
     for (const PrimExpr& index : A_buffer_load->indices) {
-        A_indices.insert(index);
+      auto vars = CollectExprs<Var>(index);
+      for (const Var& var : vars) {
+        A_indices.insert(var);
+      }
     }
   }
   for (const BufferLoad& B_buffer_load : B_buffer_loads) {
     for (const PrimExpr& index : B_buffer_load->indices) {
-        B_indices.insert(index);
+      auto vars = CollectExprs<Var>(index);
+      for (const Var& var : vars) {
+        B_indices.insert(var);
+      }
+    }
+  }
+  for (const PrimExpr& index : C->indices) {
+    auto vars = CollectExprs<Var>(index);
+    for (const Var& var : vars) {
+      C_indices.insert(var);
     }
   }
 

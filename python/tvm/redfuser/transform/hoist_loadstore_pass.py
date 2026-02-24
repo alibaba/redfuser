@@ -95,13 +95,24 @@ class TLCopyAnalyzer(functor.PyStmtExprVisitor):
             stmt_functor.post_order_visit(index, _get_var)
         return bindings
 
+    def _get_inner_most_parallel_for(self):
+        for for_idx, for_loop in enumerate(reversed(self.for_stack)):
+            if for_loop.annotations.get("bind") is not None:
+                return len(self.for_stack) - for_idx - 1
+        return -1
+
     def _find_nearest_for(self, indices: Dict) -> Optional[tir.For]:
         """根据索引找到最近的 For 循环"""
         # 从内向外查找包含这些变量的最近 For 循环
         bindings = set([v[1] for v in indices.values()])
-        for for_loop in reversed(self.for_stack):
+        inner_most_parallel_for_idx = self._get_inner_most_parallel_for()
+        for for_idx, for_loop in enumerate(reversed(self.for_stack)):
             if for_loop.loop_var in bindings:
-                return for_loop
+                nearest_for_idx = len(self.for_stack) - for_idx - 1
+                if nearest_for_idx < inner_most_parallel_for_idx:
+                    return self.for_stack[inner_most_parallel_for_idx]
+                else: 
+                    return self.for_stack[nearest_for_idx]
 
         return None
 
