@@ -70,7 +70,8 @@ def main(func_name, tile_map):
 
     mod = passes(mod)
 
-    tilelang_prog = function_to_tilelang_script(func_name, mod[func_name])
+    import_stmt = "import tilelang\nimport tilelang.language as T\n\n"
+    tilelang_prog = import_stmt + function_to_tilelang_script(func_name, mod[func_name])
     print(tilelang_prog, file=open(current_dir.joinpath("generated", f"generated_{func_name}.py"), "w"))
     print(f"Generated code saved to {current_dir.joinpath('generated', f'generated_{func_name}.py')}")
 

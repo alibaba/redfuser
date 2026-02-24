@@ -9,101 +9,80 @@ import tvm
 from tvm import tir
 from tvm.tir import PrimFunc
 from tvm.ir import IRModule
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
-from .common_analysis_v2 import normalize_prim_func, BlockInfo, IterInfo
-
-
-def _tile_loops(
-    sch: tir.Schedule,
-    loops: List[IterInfo],
-    decisions: List[int],
-) -> Tuple[List[tir.schedule.LoopRV], List[tir.schedule.LoopRV]]:
-    """
-    对循环列表进行 tiling
-    
-    Args:
-        sch: TIR Schedule
-        loops: 循环信息列表
-        decisions: 每个循环的 tile size
-        
-    Returns:
-        (outer_loops, inner_loops) 元组
-    """
-    assert len(loops) == len(decisions)
-    new_outer, new_inner = [], []
-    
-    for loop_info, factor in zip(loops, decisions):
-        extent = loop_info.dom
-        if extent < factor:
-            extents = [1, extent]
-        else:
-            assert extent % factor == 0, f"{extent} % {factor} != 0"
-            outer, inner = extent // factor, factor
-            extents = sch.sample_partitioned_tile(
-                loop_info.loop_rv[0], 2, 1, 16, decision=[outer, inner]
-            )
-        i0, i1 = sch.split(loop_info.loop_rv[0], extents)
-        new_outer.append(i0)
-        new_inner.append(i1)
-    
-    sch.reorder(*new_outer, *new_inner)
-    return new_outer, new_inner
+from .common_analysis_v2 import normalize_prim_func, BlockInfo
 
 
 def _tile_block(
-    sch: tir.Schedule, 
-    block_info: BlockInfo, 
+    sch: tir.Schedule,
+    block_info: BlockInfo,
     tile_map: Dict[str, int]
 ) -> None:
     """
     对单个 block 进行 tiling
-    
+
+    直接遍历 block 上方的所有 loop，根据 loop 的 annotations["name"] 匹配 tile_map，
+    对匹配的 loop 执行 split。这样可以正确处理一个 iter var 绑定多个 loop 的情况
+    （如 v_kv_len = T.axis.spatial(512, split * 128 + kv_len)）。
+
     Args:
         sch: TIR Schedule
         block_info: block 信息
         tile_map: name -> tile_size 映射
     """
-    # 找出需要 tile 的循环（只 tile 在 tile_map 中有对应 name 的循环）
-    assert(all(len(iter_info.loop_rv) == 1 for iter_info in block_info.iters))
+    block_rv = block_info.block_rv
+    loop_rvs = list(sch.get_loops(block_rv))
 
-    tiles = []
-    for iter_info in block_info.iters:
-        name = iter_info.annotations[0].get("name")
-        if name and name in tile_map:
-            tiles.append(tile_map[name])
-    
-    if not tiles:
+    # Step 1: 分析所有 loop，收集注解并判断是否需要 tile
+    loop_infos = []  # [(loop_rv, annotations_dict, tile_factor_or_None)]
+    for loop_rv in loop_rvs:
+        loop = sch.get(loop_rv)
+        annotations = dict(loop.annotations)
+        name = str(annotations.get("name", ""))
+        tile_factor = tile_map.get(name) if name else None
+        loop_infos.append((loop_rv, annotations, tile_factor))
+
+    # 如果没有需要 tile 的 loop，直接返回
+    if not any(info[2] is not None for info in loop_infos):
         return
-    
-    # 保存原始注解
-    original_annotations = [
-        iter_info.annotations[0]
-        for iter_info in block_info.iters
-    ]
-    
-    # 移除所有循环的注解（split 前需要移除）
-    for iter_info in block_info.iters:
-        for key in list(iter_info.annotations[0].keys()):
-            sch.unannotate(iter_info.loop_rv[0], key)
-    
-    # 计算 batch loops（不需要 tile 的循环）和需要 tile 的循环的索引
-    innermost_n = len(tiles)
-    all_iters = block_info.iters
-    batch_iters = all_iters[:-innermost_n]
-    tile_iters = all_iters[-innermost_n:]
-    
-    # 保存 batch loop RVs (这些循环不会被 split，所以可以直接使用)
-    batch_loop_rvs = [iter_info.loop_rv[0] for iter_info in batch_iters]
-    
-    # 执行 tiling
-    outer_loops, inner_loops = _tile_loops(sch, tile_iters, tiles)
-    
-    # 重新注解：batch loops + outer loops 保留原始注解
-    all_new_loops = batch_loop_rvs + outer_loops
-    for i, (ann, new_loop) in enumerate(zip(original_annotations, all_new_loops)):
-        for key, value in ann.items():
-            sch.annotate(new_loop, key, value)
+
+    # Step 2: 移除所有 loop 的注解（split 前需要移除）
+    for loop_rv, annotations, _ in loop_infos:
+        for key in list(annotations.keys()):
+            sch.unannotate(loop_rv, key)
+
+    # Step 3: 对需要 tile 的 loop 执行 split，不需要 tile 的保持原样
+    # 保持原始顺序：记录每个位置是 (loop_rv, annotations) 还是被 split 后的 (outer_rv, annotations)
+    ordered_outer_loops = []  # [(loop_rv, annotations)] 按原始顺序，包含非 tile 和 outer
+    inner_loops = []          # [loop_rv] 所有 inner loops
+
+    for loop_rv, annotations, tile_factor in loop_infos:
+        if tile_factor is None:
+            ordered_outer_loops.append((loop_rv, annotations))
+        else:
+            loop = sch.get(loop_rv)
+            extent = int(loop.extent)
+            if extent <= tile_factor:
+                extents = [1, extent]
+            else:
+                assert extent % tile_factor == 0, f"{extent} % {tile_factor} != 0"
+                outer_size, inner_size = extent // tile_factor, tile_factor
+                extents = sch.sample_partitioned_tile(
+                    loop_rv, 2, 1, 16, decision=[outer_size, inner_size]
+                )
+            i0, i1 = sch.split(loop_rv, extents)
+            ordered_outer_loops.append((i0, annotations))
+            inner_loops.append(i1)
+
+    # Step 4: Reorder - 保持非 tile 和 outer loops 的原始顺序，inner loops 放到最内层
+    all_ordered = [lv for lv, _ in ordered_outer_loops] + inner_loops
+    sch.reorder(*all_ordered)
+
+    # Step 5: 重新注解 - 恢复原始注解
+    for loop_rv, annotations in ordered_outer_loops:
+        for key, value in annotations.items():
+            sch.annotate(loop_rv, key, value)
 
 
 def _tile_by_annotation_in_func(mod: IRModule, func_name: str, tile_map: Dict[str, int]) -> IRModule:
