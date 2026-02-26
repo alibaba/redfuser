@@ -1,6 +1,7 @@
 from .transform.decompose_reduction_pass import DecomposeReduction
 from .transform.tile_by_annotation_pass import TileByAnnotation
 from .transform.blockize_inner_loops_pass import BlockizeInnerLoops
+from .transform.unify_bind_outer_loops_pass import UnifyBindOuterLoops
 from .transform.merge_fused_loop_pass import MergeFusedLoops
 from .transform.eliminate_unit_loop_pass import EliminateUnitLoops
 from .transform.io_buffer_transform_pass import TransformIOBuffers
@@ -15,6 +16,7 @@ __all__ = [
     "DecomposeReduction",
     "TileByAnnotation",
     "BlockizeInnerLoops",
+    "UnifyBindOuterLoops",
     "MergeFusedLoops",
     "EliminateUnitLoops",
     "TransformIOBuffers",

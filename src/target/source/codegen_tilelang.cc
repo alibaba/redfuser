@@ -61,6 +61,12 @@ LiteralDoc TileLangDataType(const DataType& dtype) {
     return LiteralDoc::Str("float" + std::to_string(dtype.bits()), std::nullopt);
   } else if (dtype.is_bfloat16()) {
     return LiteralDoc::Str("bfloat16", std::nullopt);
+  } else if (dtype.is_float8()) {
+    if (dtype.code() == DataType::kFloat8_e4m3fn) {
+      return LiteralDoc::Str("float8_e4m3fn", std::nullopt);
+    } else if (dtype.code() == DataType::kFloat8_e4m3fnuz) {
+      return LiteralDoc::Str("float8_e4m3fnuz", std::nullopt);
+    }
   }
   LOG(FATAL) << "Unsupported data type: " << dtype;
 }
@@ -455,7 +461,7 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
         return CallTileLang("round", {VisitExpr(op->args[0])});
       } else if (op->op.same_as(Op::Get("tir.nearbyint"))) {
         return CallTileLang("nearbyint", {VisitExpr(op->args[0])});
-      } else if (op->op.same_as(Op::Get("tir.abs"))) {
+      } else if (op->op.same_as(Op::Get("tir.fabs"))) {
         return CallTileLang("abs", {VisitExpr(op->args[0])});
       } else if (op->op.same_as(Op::Get("tir.sigmoid"))) {
         return CallTileLang("sigmoid", {VisitExpr(op->args[0])});

@@ -18,8 +18,10 @@ buffer_to_tl_region = tvm.get_global_func("tir.Buffer2TL_Region")
 
 # smaller value, higher priority
 DTYPE_PRIORITY = {
-    "float16": 0,
-    "float32": 1,
+    "float8_e4m3fn": 0,
+    "float8_e4m3fnuz": 1,
+    "float16": 2,
+    "float32": 3,
 }
 
 

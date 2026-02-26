@@ -5,6 +5,7 @@ from tvm.script import tir as T
 
 from tvm.redfuser import (
     DecomposeReduction,
+    UnifyBindOuterLoops,
     TileByAnnotation,
     BlockizeInnerLoops,
     MergeFusedLoops,
@@ -202,6 +203,7 @@ def test_decoding(tile_map):
     passes = tvm.transform.Sequential(
         [
             # tiling
+            UnifyBindOuterLoops,
             TileByAnnotation(tile_map),
             # eliminate unit loops and merge fused loops
             EliminateUnitLoops,
