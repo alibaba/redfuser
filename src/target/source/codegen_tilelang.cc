@@ -87,7 +87,11 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
     }
     ffi::Array<StmtDoc> body = Flatten({VisitStmt(func->body)});
 
-    ffi::Array<ExprDoc> decorators;
+    ffi::Array<ExprDoc> kernel_decorators, func_decorators;
+    // Add decorator: @T.prim_func
+    kernel_decorators.push_back(TileLangPrefix("prim_func"));
+    auto kernel_doc = FunctionDoc(IdDoc("kernel"), params, kernel_decorators, std::nullopt, body);
+
     // Add decorator: @tilelang.jit(out_idx=[...])
     if (auto out_idx = func->attrs.GetAttr<ffi::Array<IntImm>>("out_idx")) {
       ffi::Array<ExprDoc> out_idx_elements;
@@ -95,13 +99,12 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
         out_idx_elements.push_back(LiteralDoc::Int(idx->value, std::nullopt));
       }
       auto out_idx_doc = ListDoc(out_idx_elements);
-      decorators.push_back(
+      func_decorators.push_back(
           IdDoc("tilelang")->Attr("jit")->Call({}, {ffi::String("out_idx")}, {out_idx_doc}));
     }
-    // Add decorator: @T.prim_func
-    decorators.push_back(TileLangPrefix("prim_func"));
-
-    return FunctionDoc(IdDoc(func_name), params, decorators, std::nullopt, body);
+    auto return_doc = ReturnDoc(IdDoc("kernel"));
+    
+    return FunctionDoc(IdDoc(func_name), {}, func_decorators, std::nullopt, {kernel_doc, return_doc});
   }
 
  protected:
