@@ -2,6 +2,7 @@ import tvm
 from tvm import te, topi
 from tvm.redfuser import (
     DecomposeReduction,
+    UnifyBindOuterLoops,
     TileByAnnotation,
     BlockizeInnerLoops,
     MergeFusedLoops,
@@ -44,6 +45,7 @@ def main(func_name, tile_map):
 
     passes = tvm.transform.Sequential([
         # generate online expr
+        UnifyBindOuterLoops,
         GenerateOnlineExpr,
         # tiling
         TileByAnnotation(tile_map),
