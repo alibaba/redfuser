@@ -463,6 +463,8 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
         return CallTileLang("nearbyint", {VisitExpr(op->args[0])});
       } else if (op->op.same_as(Op::Get("tir.fabs"))) {
         return CallTileLang("abs", {VisitExpr(op->args[0])});
+      } else if (op->op.same_as(Op::Get("tir.pow"))) {
+        return CallTileLang("pow", {VisitExpr(op->args[0]), VisitExpr(op->args[1])});
       } else if (op->op.same_as(Op::Get("tir.sigmoid"))) {
         return CallTileLang("sigmoid", {VisitExpr(op->args[0])});
       }
