@@ -115,7 +115,7 @@ class ReductionProcessor:
         return (G_expr, H_expr, prev_H_expr)
 
     def _parse_config(self):
-        local = {"BMat": BMat, "max": sp.Max, "abs": sp.Abs}
+        local = {"BMat": BMat, "max": sp.Max, "abs": sp.Abs, "fabs": sp.Abs}
         for c in self.c_map.keys():
             self.c_syms[c] = sp.Symbol(c, real=True, positive=True)
         for x in self.x_map.keys():
