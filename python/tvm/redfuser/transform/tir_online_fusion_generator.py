@@ -122,6 +122,9 @@ def transform_single_block(
         if expr.is_Add:
             return reduce(lambda a, b: tir.Add(a, b), [sympy_expr_to_tir(arg, ew_map) for arg in expr.args]) 
 
+        if expr.is_Pow:
+            return reduce(lambda a, b: tir.pow(a, b), [sympy_expr_to_tir(arg, ew_map) for arg in expr.args])
+
         # d0, d1 ...
         if expr.is_Dummy:
             xyc = ew_map[expr.name]
@@ -141,6 +144,7 @@ def transform_single_block(
         # d0 -> -1 * d0
         # TYPE CHECK!
         if expr.is_Number:
+            # FIXME 所有reduce操作的结果都在TE表达式中被cast到了float32...
             return tir.FloatImm("float32", float(expr))
 
         raise NotImplementedError(f"Unknown expr type: {type(expr)}")
@@ -174,42 +178,17 @@ def transform_single_block(
         rescale_factor_stmt = None
 
     # 2.2 产生输入数据
-    # 遍历reduce_func的所有BufferLoad(可以不包括Float和Int,没有什么影响),当存在在x_map中的BufferLoad时,其shape,dtype,indices就是所需的
-    # e.g. 
-    # case 1(not GEMM):
-    #   a = a + b
-    #   ori_reduce_func: b
-    #   sub_reduce_func: b(把最外层可能的Cast去掉)
-    #   input_buffer: input_x
-    #   input_buffer_load: input_x[v_a, v_b, ...]
-    #   replaced_reduce_func: 在ori_reduce_func中匹配到sub_reduce_func,然后替换成input_buffer_load 
-    #   = input_x[v_a, v_b, ...]
-    # case 2(not GEMM but with a Cast):
-    #   a = a + T.Cast(b)
-    #   ori_reduce_func: T.Cast(b)
-    #   sub_reduce_func: b
-    #   input_buffer: input_x
-    #   input_buffer_load: input_x[v_a, v_b, ...]
-    #   replaced_reduce_func: T.Cast(input_x[v_a, v_b, ...])
-    # case 3(GEMM):
-    #   a += b @ c
-    #   ori_reduce_func: [b, c]
-    #   sub_reduce_func: [b, c]
-    #   input_buffer: [input_x_y, input_x_z]
-    #   input_buffer_load: [input_x_y[...], input_x_z[...]]
-    #   replaced_reduce_func: input_x_y[...] * input_x_z[...]
     ori_reduce_func = reduction_infos.reduce_funcs[idx]
 
-    # 有没有可能这里得到的reduce_func,是内嵌了Cast的表达式?如:Add(a, Cast(b))
-    # 那么input应该是x = a + Cast(b)...?的吧
-    def _remove_cast(e):
+    def _remove_cast(e, dtype_stack: list):
         if isinstance(e, tir.Cast):
-            return _remove_cast(e.value)
+            dtype_stack.append(e.dtype)
+            return _remove_cast(e.value, dtype_stack)
         return e
 
-    def _replace_sub(e, sub, load):
-        if isinstance(e, tir.Cast):
-            return tir.Cast(e.dtype, _replace_sub(e.value, sub, load))
+    def _replace_sub(e, sub, load, depth):
+        if isinstance(e, tir.Cast) and depth > 0:
+            return tir.Cast(e.dtype, _replace_sub(e.value, sub, load, depth - 1))
         
         if tvm.ir.structural_equal(e, sub):
             return load
@@ -220,25 +199,55 @@ def transform_single_block(
         if isinstance(e, tir.BufferLoad):
             sub_reduce_func_loads.append(e)
 
-    # 处理GEMM,乘法的左边和右边都需要处理
-    if block_info.is_gemm():
-        assert isinstance(ori_reduce_func, tir.Mul)
-        ori_reduce_funcs = [ori_reduce_func.a, ori_reduce_func.b]
-    else:
-        ori_reduce_funcs = [ori_reduce_func]
-
     input_buffers = []
     input_buffer_stmts = []
 
+    """
+        输入的产生逻辑:
+        1. 对于GEMM op,需要处理ori_reduce_func左右两边的表达式,最终得到的replaced_reduce_func有两种情况:
+            a. y = y + a * b
+            b. y = y + T.Cast("?", a) * T.Cast("?", b)
+            也即replaced_reduce_func允许至多一个T.Cast
+
+        2. 对于非GEMM op,期望得到的replaced_reduce_func中不存在显式的T.Cast,也即可以直接用ori_reduce_func来构造输入
+    """
+    if block_info.is_gemm():
+        assert isinstance(ori_reduce_func, tir.Mul)
+
+        ori_reduce_funcs = [ori_reduce_func.a, ori_reduce_func.b]
+
+        # 同时开始便利a和b,找到能够同时剥离Cast的最大深度,该位置后的value即为需要提取成为input的value
+        dtype_stack_a = []
+        dtype_stack_b = []
+
+        _ = _remove_cast(ori_reduce_funcs[0], dtype_stack_a)
+        _ = _remove_cast(ori_reduce_funcs[1], dtype_stack_b)
+
+        max_depth_ab = 0
+        for d in range(min(len(dtype_stack_a), len(dtype_stack_b))):
+            if dtype_stack_a[d] == dtype_stack_b[d]:
+                max_depth_ab = d + 1
+            else:
+                break
+
+        # FIXME 上述产生max_depth_ab的算法和注释中的说明并不是一致的,上述算法max_depth_ab==1的条件主要取决于b矩阵是否是kernel的一个输入
+        # 若是的话,那么b大概率在tvm的转换中也只可能带上一组T.Cast
+        # 若b也是由某些计算得到的,那么就不一定了,出现这种case的时候再修改吧...
+        assert max_depth_ab == 1
+
+        # 对a和b同时调用max_depth_ab次,那么就能得到对应的sub_reduce_func,再重复非GEMM的情况产生input buffer即可
+        sub_reduce_funcs = list(map(lambda ori_reduce_func: reduce(lambda expr, _: expr.value, range(max_depth_ab), ori_reduce_func), ori_reduce_funcs))
+    else:
+        # 非GEMM op应该啥也不用干,直接产生input buffer,同时做替换
+        sub_reduce_funcs = [ori_reduce_func]
+
     # BAD NAME!
     replaced_reduce_func = ori_reduce_func
-    for part_reduce_func in ori_reduce_funcs:
-        # 处理Cast,目前看起来似乎只需要处理Cast就可以了,其他的都可以直接用来产生input
-        sub_reduce_func = _remove_cast(part_reduce_func)
-
+    for sub_idx, sub_reduce_func in enumerate(sub_reduce_funcs):
         sub_reduce_func_loads = []
         tir.stmt_functor.post_order_visit(sub_reduce_func, _collect_sub_func_loads)
 
+        # 找到表达式中真实的输入(即x变量)
         needed_reduce_func_load = None
         for load in sub_reduce_func_loads:
             if reduction_infos.var_map[str(load)].startswith("x"):
@@ -249,25 +258,25 @@ def transform_single_block(
         if not isinstance(sub_reduce_func, tir.BufferLoad):
             input_buffer = tir.decl_buffer(
                 shape=needed_reduce_func_load.buffer.shape,
-                dtype=needed_reduce_func_load.buffer.dtype,
-                name=f"input_{idx}"
+                dtype=sub_reduce_func.dtype, # Attention here
+                name=f"input_{idx}_{sub_idx}"
             )
 
             input_buffer_load = tir.BufferLoad(
                 buffer=input_buffer,
                 indices=_indices_to_indices(needed_reduce_func_load.indices)
             )
-            
-            # 如果是GEMM的话,replaced_reduce_func一定是一个Mul
-            # 需要分开replace,因为replace的逻辑是只去掉Cast,在函数里面判断感觉有点繁琐
+
+            # _replace_sub函数顶格就会判断Cast,所以对于GEMM的情况,这里直接传replaced_reduce_func是有问题的
+            # 以前写的是对的,就是这样可能有点误解,对于GEMM的左右两边,都尝试对两边进行替换了,实际上都只需要一边就好了
             if block_info.is_gemm():
                 assert isinstance(replaced_reduce_func, tir.Mul)
                 replaced_reduce_func = tir.Mul(
-                    a=_replace_sub(replaced_reduce_func.a, sub_reduce_func, input_buffer_load),
-                    b=_replace_sub(replaced_reduce_func.b, sub_reduce_func, input_buffer_load)
+                    a=_replace_sub(replaced_reduce_func.a, sub_reduce_func, input_buffer_load, max_depth_ab),
+                    b=_replace_sub(replaced_reduce_func.b, sub_reduce_func, input_buffer_load, max_depth_ab)
                 )
             else:
-                replaced_reduce_func = _replace_sub(replaced_reduce_func, sub_reduce_func, input_buffer_load)
+                replaced_reduce_func = _replace_sub(replaced_reduce_func, sub_reduce_func, input_buffer_load, 0) # 这里depth参数填0的话,遇到T.Cast也会跳过的
 
             input_buffer_stmt = tir.BufferStore(
                 buffer=input_buffer,
@@ -316,9 +325,11 @@ def transform_single_block(
     # 处理init,reads/writes相关
     # 对reduce_target进行初始化
     if reduction_config.reduce_op == "+":
-        init_value = tir.FloatImm("float32", 0.0)
+        init_value = tir.FloatImm(reduce_target_buffer.dtype, 0.0)
     elif reduction_config.reduce_op == "max":
-        init_value = -tir.infinity(dtype="float32")
+        # init_value = -tir.infinity(dtype=reduce_target_buffer.dtype)
+        # 用一个较大的负数代替负无穷
+        init_value = tir.FloatImm(reduce_target_buffer.dtype, -1e6)
 
     init = tir.BufferStore(
         buffer=reduce_target_buffer,
