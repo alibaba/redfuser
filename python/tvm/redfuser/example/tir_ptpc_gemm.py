@@ -83,6 +83,7 @@ def main(func_name, tile_map):
     # func = te.create_prim_func([A, W_fp8, W_scale, o])
 
     # mod = tvm.IRModule({func_name: func})
+    # mod.show()
     mod = Module
     
     passes = tvm.transform.Sequential([
@@ -114,7 +115,6 @@ def main(func_name, tile_map):
     )
 
     mod = passes(mod)
-
     mod.show()
 
     import_stmt = "import tilelang\nimport tilelang.language as T\n\n"

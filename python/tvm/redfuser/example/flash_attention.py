@@ -45,9 +45,9 @@ def main(func_name, tile_map):
 
     passes = tvm.transform.Sequential([
         # generate online expr
-        UnifyBindOuterLoops,
         GenerateOnlineExpr,
         # tiling
+        UnifyBindOuterLoops,
         TileByAnnotation(tile_map),
         # eliminate unit loops and merge fused loops
         EliminateUnitLoops,
@@ -67,10 +67,11 @@ def main(func_name, tile_map):
         UnifyGemmDtype,
         HoistTLCopy,
         MoveAllocBuffer,
-        BindBlockIdx]
-    )
+        BindBlockIdx
+    ])
 
     mod = passes(mod)
+    mod.show()
 
     import_stmt = "import tilelang\nimport tilelang.language as T\n\n"
     tilelang_prog = import_stmt + function_to_tilelang_script(func_name, mod[func_name])

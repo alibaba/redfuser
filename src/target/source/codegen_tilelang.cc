@@ -109,8 +109,9 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
           IdDoc("tilelang")->Attr("jit")->Call({}, {ffi::String("out_idx")}, {out_idx_doc}));
     }
     auto return_doc = ReturnDoc(IdDoc("kernel"));
-    
-    return FunctionDoc(IdDoc(func_name), {}, func_decorators, std::nullopt, {kernel_doc, return_doc});
+
+    return FunctionDoc(IdDoc(func_name), {}, func_decorators, std::nullopt,
+                       {kernel_doc, return_doc});
   }
 
  protected:
@@ -390,6 +391,15 @@ class CodeGenTileLang : protected StmtFunctor<Doc(const Stmt&)>,
       auto reduce_dim = VisitExpr(op->args[3]);
       auto [clear, clear_doc] = ToBoolean(VisitExpr(op->args[4]));
       return CallTileLang("reduce", {src, dst, reduce_type, reduce_dim, clear_doc});
+    } else if (op->op.same_as(builtin::tl_reduce_topk())) {
+      auto input = Downcast<IndexDoc>(VisitExpr(op->args[0]))->value;
+      auto topk_values = Downcast<IndexDoc>(VisitExpr(op->args[1]))->value;
+      auto topk_indices = Downcast<IndexDoc>(VisitExpr(op->args[2]))->value;
+      auto topk = VisitExpr(op->args[3]);
+      auto axis = VisitExpr(op->args[4]);
+      auto start_offset = VisitExpr(op->args[5]);
+      return IdDoc("reduce_topk")
+          ->Call({input, topk_values, topk_indices, topk, axis, start_offset});
     } else if (op->op.same_as(builtin::tl_copy())) {
       std::vector<std::pair<ffi::String, ExprDoc>> kwargs;
       // we need a real region in T.copy

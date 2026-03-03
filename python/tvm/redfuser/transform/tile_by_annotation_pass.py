@@ -54,12 +54,12 @@ def _tile_block(
 
     # Step 3: 对需要 tile 的 loop 执行 split，不需要 tile 的保持原样
     # 保持原始顺序：记录每个位置是 (loop_rv, annotations) 还是被 split 后的 (outer_rv, annotations)
-    ordered_outer_loops = []  # [(loop_rv, annotations)] 按原始顺序，包含非 tile 和 outer
+    ordered_outer_loops = []  # [(loop_rv, annotations, inner_var)] 按原始顺序，包含非 tile 和 outer
     inner_loops = []          # [loop_rv] 所有 inner loops
 
     for loop_rv, annotations, tile_factor in loop_infos:
         if tile_factor is None:
-            ordered_outer_loops.append((loop_rv, annotations))
+            ordered_outer_loops.append((loop_rv, annotations, None))
         else:
             loop = sch.get(loop_rv)
             extent = int(loop.extent)
@@ -68,19 +68,19 @@ def _tile_block(
             else:
                 assert extent % tile_factor == 0, f"{extent} % {tile_factor} != 0"
                 outer_size, inner_size = extent // tile_factor, tile_factor
-                extents = sch.sample_partitioned_tile(
-                    loop_rv, 2, 1, 16, decision=[outer_size, inner_size]
-                )
+                extents = [outer_size, inner_size]
             i0, i1 = sch.split(loop_rv, extents)
-            ordered_outer_loops.append((i0, annotations))
+            ordered_outer_loops.append((i0, annotations, sch.get(i1).loop_var.name))
             inner_loops.append(i1)
 
     # Step 4: Reorder - 保持非 tile 和 outer loops 的原始顺序，inner loops 放到最内层
-    all_ordered = [lv for lv, _ in ordered_outer_loops] + inner_loops
+    all_ordered = [lv for lv, _, _ in ordered_outer_loops] + inner_loops
     sch.reorder(*all_ordered)
 
     # Step 5: 重新注解 - 恢复原始注解
-    for loop_rv, annotations in ordered_outer_loops:
+    for loop_rv, annotations, inner_var in ordered_outer_loops:
+        if inner_var is not None:
+            sch.annotate(loop_rv, "tiled", inner_var)
         for key, value in annotations.items():
             sch.annotate(loop_rv, key, value)
 

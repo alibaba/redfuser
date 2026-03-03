@@ -440,8 +440,11 @@ TIR_DEFINE_BUILTIN_FUNC(ignore_loop_partition)
     .set_attr<TScriptDtypePrintLocation>("TScriptDtypePrintLocation",
                                          Integer(ScriptDtypePrintLocation::kNone));
 
-TIR_DEFINE_BUILTIN_FUNC(tl_region)
-    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure));
+TIR_DEFINE_BUILTIN_FUNC(vec_reduce)
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
+
+TIR_DEFINE_BUILTIN_FUNC(tl_region).set_attr<TCallEffectKind>("TCallEffectKind",
+                                                             Integer(CallEffectKind::kPure));
 
 TIR_DEFINE_BUILTIN_FUNC(tl_parallel)
     .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kOpaque));
@@ -453,6 +456,9 @@ TIR_DEFINE_BUILTIN_FUNC(tl_fill).set_num_inputs(2).set_attr<TCallEffectKind>(
     "TCallEffectKind", Integer(CallEffectKind::kOpaque));
 
 TIR_DEFINE_BUILTIN_FUNC(tl_reduce).set_attr<TCallEffectKind>("TCallEffectKind",
+                                                             Integer(CallEffectKind::kOpaque));
+
+TIR_DEFINE_BUILTIN_FUNC(tl_reduce_topk).set_attr<TCallEffectKind>("TCallEffectKind",
                                                              Integer(CallEffectKind::kOpaque));
 
 TIR_DEFINE_BUILTIN_FUNC(tl_gemm).set_attr<TCallEffectKind>("TCallEffectKind",
