@@ -44,19 +44,27 @@ class BufferScopeAnalyzer:
             return False
 
         def _visit_stmt(stmt: tir.Stmt):
-            if not isinstance(stmt, tir.BufferStore):
-                raise ValueError(f"Invalid statement: {stmt}")
-            if _is_pure_load_stmt(stmt):
-                return
-            self._register_buffer_usage(stmt.buffer, "fragment")
-            if is_gemm_stmt(stmt):
-                load_buffers = get_buffer_load_from_prim_expr(stmt.value.b)
-                for load_buffer in load_buffers:
-                    self._register_buffer_usage(load_buffer.buffer, "shared")
-            else:
-                load_buffers = get_buffer_load_from_prim_expr(stmt.value)
-                for load_buffer in load_buffers:
-                    self._register_buffer_usage(load_buffer.buffer, "fragment")
+            if isinstance(stmt, tir.BufferStore):
+                if _is_pure_load_stmt(stmt):
+                    return
+                self._register_buffer_usage(stmt.buffer, "fragment")
+                if is_gemm_stmt(stmt):
+                    load_buffers = get_buffer_load_from_prim_expr(stmt.value.b)
+                    for load_buffer in load_buffers:
+                        self._register_buffer_usage(load_buffer.buffer, "shared")
+                else:
+                    load_buffers = get_buffer_load_from_prim_expr(stmt.value)
+                    for load_buffer in load_buffers:
+                        self._register_buffer_usage(load_buffer.buffer, "fragment")
+            elif isinstance(stmt, tir.Evaluate):
+                if stmt.value.op.same_as(tir.op.Op.get("tir.vec_reduce")):
+                    op_type, vec_len, axis = stmt.value.args[0], stmt.value.args[1], stmt.value.args[2]
+                    if op_type == "topk":
+                        self._register_buffer_usage(stmt.value.args[3].buffer, "fragment")
+                        self._register_buffer_usage(stmt.value.args[4].buffer, "fragment")
+                        self._register_buffer_usage(stmt.value.args[5].buffer, "fragment")
+                else:
+                    raise ValueError(f"Invalid statement: {stmt}")
 
         block = self.sch.get(block_info.block_rv)
         if isinstance(block.body, tir.SeqStmt):

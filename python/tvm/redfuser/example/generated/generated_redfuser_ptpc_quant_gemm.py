@@ -22,19 +22,19 @@ def redfuser_ptpc_quant_gemm():
                 T.copy(A[v_m_o * 128:v_m_o * 128 + 128, v_k_o * 128:v_k_o * 128 + 128], A_1[0:128, 0:128])
                 T.copy(W_fp8[v_n_o * 128:v_n_o * 128 + 128, v_k_o * 128:v_k_o * 128 + 128], W_fp8_1[0:128, 0:128])
                 T.copy(max_elem[0:128], prev_max_elem[0:128])
-                for m_1_m, k_1_m in T.Parallel(128, 128):
-                    input_0_0[m_1_m, k_1_m] = T.Cast("float32", T.abs(A_1[m_1_m, k_1_m]))
+                for m_1, k_1 in T.Parallel(128, 128):
+                    input_0_0[m_1, k_1] = T.Cast("float32", T.abs(A_1[m_1, k_1]))
                 T.reduce(input_0_0, max_elem, "max", 1, False)
-                for m_1_m in T.Parallel(128):
-                    rescale_factor_1[m_1_m] = T.pow(max_elem[m_1_m], -1.0) * prev_max_elem[m_1_m]
-                for m_1_m, k_1_m in T.Parallel(128, 128):
-                    input_1_0[m_1_m, k_1_m] = T.Cast("float8_e4m3fn", T.Cast("float32", A_1[m_1_m, k_1_m]) / (max_elem[m_1_m] / 448.0))
-                for m_1_m, n_1_m in T.Parallel(128, 128):
-                    matmul_NT[m_1_m, n_1_m] = matmul_NT[m_1_m, n_1_m] * rescale_factor_1[m_1_m]
+                for m_1 in T.Parallel(128):
+                    rescale_factor_1[m_1] = T.pow(max_elem[m_1], -1.0) * prev_max_elem[m_1]
+                for m_1, k_1 in T.Parallel(128, 128):
+                    input_1_0[m_1, k_1] = T.Cast("float8_e4m3fn", T.Cast("float32", A_1[m_1, k_1]) / (max_elem[m_1] / 448.0))
+                for m_1, n_1 in T.Parallel(128, 128):
+                    matmul_NT[m_1, n_1] = matmul_NT[m_1, n_1] * rescale_factor_1[m_1]
                 T.gemm(input_1_0, W_fp8_1, matmul_NT, transpose_B=True, policy=1)
             T.copy(W_scale[v_n_o * 128:v_n_o * 128 + 128], W_scale_1[0:128])
-            for m_1, n_1 in T.Parallel(128, 128):
-                o_1[m_1, n_1] = T.Cast("float16", matmul_NT[m_1, n_1] * (max_elem[m_1] / 448.0) * W_scale_1[n_1])
+            for m_1_1, n_1_1 in T.Parallel(128, 128):
+                o_1[m_1_1, n_1_1] = T.Cast("float16", matmul_NT[m_1_1, n_1_1] * (max_elem[m_1_1] / 448.0) * W_scale_1[n_1_1])
             T.copy(o_1[0:128, 0:128], o[v_m_o * 128:v_m_o * 128 + 128, v_n_o * 128:v_n_o * 128 + 128])
 
     return kernel

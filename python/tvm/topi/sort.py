@@ -203,3 +203,46 @@ def topk(data, k=1, axis=-1, ret_type="both", is_ascend=False, dtype="int64"):
         tag="topk_cpu",
     )
     return out
+
+
+def tir_reduce_topk(data, k=1, axis=-1):
+    """Get the top k elements in an input tensor along the given axis. This is just a declaration of the builtin function.
+
+    Parameters
+    ----------
+    data : tvm.te.Tensor
+        The input tensor.
+
+    k : int or tvm.te.Tensor, optional
+        Number of top elements to select. Return all elements if k < 1.
+
+    axis : int, optional
+        Axis long which to sort the input tensor.
+
+    Returns
+    -------
+    out : tvm.te.Tensor or List[tvm.te.Tensor]
+        The computed result.
+    """
+    buffer_to_tl_region = tvm.get_global_func("tir.Buffer2TL_Region")
+    def __call_intrin(ins, outs):
+        return tvm.tir.call_intrin("handle", tvm.tir.op.Op.get("tir.reduce_topk"), buffer_to_tl_region(ins[0]), buffer_to_tl_region(outs[0]), buffer_to_tl_region(outs[1]), k, axis)
+    
+    out_shape = list(get_const_tuple(data.shape))
+    assert isinstance(k, int) and k >= 1
+    out_shape[axis] = k
+    out_bufs = [
+        tvm.tir.decl_buffer(out_shape, data.dtype, "value_buf"),
+        tvm.tir.decl_buffer(out_shape, "int32", "indices_buf")
+    ]
+    out_shapes = [out_shape, out_shape]
+
+    out = te.extern(
+        out_shapes,
+        [data],
+        __call_intrin,
+        out_buffers=out_bufs,
+        name="tir_reduce_topk",
+        tag="tir_reduce_topk"
+    )
+    return out

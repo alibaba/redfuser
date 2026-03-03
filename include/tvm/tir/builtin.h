@@ -974,6 +974,8 @@ TVM_DLL const Op& get_active_lane_mask();
 /*! \brief Annotate a predicate not be considered as target condition of loop partition. */
 TVM_DLL const Op& ignore_loop_partition();
 
+TVM_DLL const Op& vec_reduce();
+
 /*! \brief TileLang region operation. */
 TVM_DLL const Op& tl_region();
 
@@ -988,6 +990,9 @@ TVM_DLL const Op& tl_fill();
 
 /*! \brief TileLang reduce operation. */
 TVM_DLL const Op& tl_reduce();
+
+/*! \brief TileLang reduce topk operation. */
+TVM_DLL const Op& tl_reduce_topk();
 
 /*! \brief TileLang GEMM operation. */
 TVM_DLL const Op& tl_gemm();

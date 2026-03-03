@@ -47,7 +47,8 @@ namespace tir {
 
 PrimExpr Buffer2TL_Region(const Buffer& buffer) {
   ffi::Array<PrimExpr> args;
-  auto buf_load = BufferLoad(buffer, ffi::Array<PrimExpr>(buffer->shape.size(), IntImm(DataType::Int(32), 0)));
+  auto buf_load =
+      BufferLoad(buffer, ffi::Array<PrimExpr>(buffer->shape.size(), IntImm(DataType::Int(32), 0)));
   args.push_back(buf_load);
   for (size_t i = 0; i < buffer->shape.size(); i++) {
     args.push_back(buffer->shape[i]);
@@ -72,6 +73,7 @@ class TileLangBuiltinConverter : public StmtExprMutator {
   Stmt VisitStmt_(const ForNode* op) override;
   Stmt VisitStmt_(const BlockRealizeNode* op) override;
   Stmt VisitStmt_(const BufferStoreNode* op) override;
+  Stmt VisitStmt_(const EvaluateNode* op) override;
 
   bool IsCopyStmt(const BufferStoreNode* stmt);
   bool IsFillStmt(const BufferStoreNode* stmt);
@@ -164,11 +166,53 @@ Stmt TileLangBuiltinConverter::VisitStmt_(const BufferStoreNode* op) {
   }
 }
 
+Stmt TileLangBuiltinConverter::VisitStmt_(const EvaluateNode* op) {
+  if (op->value.as<CallNode>()) {
+    auto call = Downcast<Call>(op->value);
+    if (call->op.same_as(builtin::vec_reduce())) {
+      auto op_type = Downcast<StringImm>(call->args[0]);
+      auto vec_len = Downcast<IntImm>(call->args[1]);
+      auto axis = Downcast<IntImm>(call->args[2]);
+      if (op_type->value == "topk") {
+        auto input = Downcast<BufferLoad>(call->args[3]);
+        auto topk_values = Downcast<BufferLoad>(call->args[4]);
+        auto topk_indices = Downcast<BufferLoad>(call->args[5]);
+        auto start_offset = call->args[6];
+        auto input_region = Convert2TL_Region(input->buffer, input->indices);
+        auto topk_values_region = Convert2TL_Region(topk_values->buffer, topk_values->indices);
+        auto topk_indices_region = Convert2TL_Region(topk_indices->buffer, topk_indices->indices);
+        ffi::Array<PrimExpr> args;
+        args.push_back(input_region);
+        args.push_back(topk_values_region);
+        args.push_back(topk_indices_region);
+        args.push_back(IntImm(DataType::Int(32), vec_len->value));
+        args.push_back(IntImm(DataType::Int(32), axis->value));
+        if (auto iter_var = input->indices[axis->value < 0 ? axis->value + input->indices.size() : axis->value].as<VarNode>()) {
+          args.push_back(analyzer_.Simplify(Substitute(start_offset, {{GetRef<Var>(iter_var), IntImm(DataType::Int(32), 0)}})));
+        } else {
+          Dump(op);
+          Dump(input->indices[axis->value < 0 ? axis->value + input->indices.size() : axis->value]);
+          ICHECK(false) << "Unsupported index type: " << input->indices[axis->value < 0 ? axis->value + input->indices.size() : axis->value];
+        }
+        return Evaluate(Call(DataType::Void(), builtin::tl_reduce_topk(), args));
+      }
+    }
+  }
+  ICHECK(false) << "Unsupported reduce operation: " << op->value;
+}
+
 bool TileLangBuiltinConverter::IsCopyStmt(const BufferStoreNode* stmt) {
   return stmt->value.as<BufferLoadNode>() != nullptr;
 }
 
 bool TileLangBuiltinConverter::IsFillStmt(const BufferStoreNode* stmt) {
+  if (stmt->value.as<BroadcastNode>()) {
+    auto broadcast = Downcast<Broadcast>(stmt->value);
+    if (broadcast->value.as<IntImmNode>() != nullptr ||
+        broadcast->value.as<FloatImmNode>() != nullptr) {
+      return true;
+    }
+  }
   return stmt->value.as<IntImmNode>() != nullptr || stmt->value.as<FloatImmNode>() != nullptr;
 }
 
@@ -245,17 +289,13 @@ Stmt TileLangBuiltinConverter::Convert2TL_COPY(const BufferStoreNode* stmt) {
 
 Stmt TileLangBuiltinConverter::Convert2TL_FILL(const BufferStoreNode* stmt) {
   PrimExpr dst_region = Convert2TL_Region(stmt->buffer, stmt->indices);
-  if (auto expr = stmt->value.as<IntImmNode>()) {
-    auto value = GetRef<IntImm>(expr);
-    auto call = Call(DataType::Void(), builtin::tl_fill(), {dst_region, value});
-    return Evaluate(call);
-  } else if (auto expr = stmt->value.as<FloatImmNode>()) {
-    auto value = GetRef<FloatImm>(expr);
-    auto call = Call(DataType::Void(), builtin::tl_fill(), {dst_region, value});
-    return Evaluate(call);
-  } else {
-    ICHECK(false) << "Unsupported fill operation: " << stmt->value;
+  PrimExpr value = stmt->value;
+  if (auto broadcast = value.as<BroadcastNode>()) {
+    value = broadcast->value;
   }
+  ICHECK(value->IsInstance<IntImmNode>() || value->IsInstance<FloatImmNode>())
+      << "Unsupported fill operation: " << stmt->value;
+  return Evaluate(Call(DataType::Void(), builtin::tl_fill(), {dst_region, value}));
 }
 
 Stmt TileLangBuiltinConverter::Convert2TL_PARALLEL(const BufferStoreNode* stmt) {
@@ -306,6 +346,8 @@ PrimExpr TileLangBuiltinConverter::Convert2TL_Region(const Buffer& buffer,
   for (const auto& index : indices) {
     ffi::Optional<Var> tile_var;
     ffi::Optional<For> tile_for;
+    ffi::Optional<IntImm> start;
+    ffi::Optional<IntImm> lanes;
     // FIXME: only support single tile var now
     PostOrderVisit(index, [&](const ObjectRef& node) {
       if (const auto* var_node = node.as<VarNode>()) {
@@ -314,6 +356,13 @@ PrimExpr TileLangBuiltinConverter::Convert2TL_Region(const Buffer& buffer,
           tile_var = var;
           tile_for = GetRef<For>(for_node);
         }
+      } else if (const auto* ramp = node.as<RampNode>()) {
+        auto stride = Downcast<IntImm>(ramp->stride);
+        if (stride->value != 1) {
+          ICHECK(false) << "Unsupported stride: " << stride->value;
+        }
+        start = Downcast<IntImm>(ramp->base);
+        lanes = Downcast<IntImm>(ramp->lanes);
       }
     });
 
@@ -321,10 +370,11 @@ PrimExpr TileLangBuiltinConverter::Convert2TL_Region(const Buffer& buffer,
       PrimExpr tile_min = analyzer_.Simplify(tile_for.value()->min);
       PrimExpr tile_extent = analyzer_.Simplify(tile_for.value()->extent);
 
-      Map<Var, PrimExpr> vmap;
-      vmap.Set(tile_var.value(), tile_min);
-      new_indices.push_back(analyzer_.Simplify(Substitute(index, vmap)));
+      new_indices.push_back(analyzer_.Simplify(Substitute(index, {{tile_var.value(), tile_min}})));
       extents.push_back(tile_extent);
+    } else if (start.has_value()) {
+      new_indices.push_back(analyzer_.Simplify(start.value()));
+      extents.push_back(lanes.value());
     } else {
       new_indices.push_back(analyzer_.Simplify(index));
       extents.push_back(make_const(index.dtype(), 1));
@@ -358,8 +408,6 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   refl::GlobalDef().def("tir.transform.ConvertToTileLangBuiltins", ConvertToTileLangBuiltins);
   refl::GlobalDef().def("tir.Buffer2TL_Region", Buffer2TL_Region);
 }
-
-
 
 }  // namespace transform
 }  // namespace tir

@@ -161,7 +161,11 @@ class BufferAccessRegionCollector : public StmtExprVisitor {
     if (inside_tiling_) {
       dom_map_.emplace(op->loop_var.get(), arith::IntSet::FromRange(loop_range));
     } else {
-      dom_map_.emplace(op->loop_var.get(), arith::IntSet::SinglePoint(loop_range->min));
+      if (op->annotations.find("tiled") == op->annotations.end() && op->annotations.find("bind") == op->annotations.end()) {
+        dom_map_.emplace(op->loop_var.get(), arith::IntSet::FromRange(loop_range));
+      } else {
+        dom_map_.emplace(op->loop_var.get(), arith::IntSet::SinglePoint(loop_range->min));
+      }
     }
     StmtExprVisitor::VisitStmt_(op);
     dom_map_.erase(op->loop_var.get());
@@ -672,7 +676,11 @@ class BufferCompactor : public StmtExprMutator {
     if (inside_tiling_) {
       dom_map_.emplace(op->loop_var.get(), arith::IntSet::FromRange(loop_range));
     } else {
-      dom_map_.emplace(op->loop_var.get(), arith::IntSet::SinglePoint(loop_range->min));
+      if (op->annotations.find("tiled") == op->annotations.end() && op->annotations.find("bind") == op->annotations.end()) {
+        dom_map_.emplace(op->loop_var.get(), arith::IntSet::FromRange(loop_range));
+      } else {
+        dom_map_.emplace(op->loop_var.get(), arith::IntSet::SinglePoint(loop_range->min));
+      }
     }
     Stmt stmt = StmtExprMutator::VisitStmt_(op);
     dom_map_.erase(op->loop_var.get());
