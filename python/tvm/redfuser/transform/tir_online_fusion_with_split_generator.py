@@ -13,6 +13,8 @@ TIR Online Fusion Generator
 
 生成的多个Block会在后续pass中进行真正的循环融合
 """
+from typing import Optional
+
 import tvm
 from tvm import tir
 
@@ -24,12 +26,16 @@ from .utils import BMat, ElementwiseApplyNAry
 from .common_analysis_v2 import _get_blockrealize
 
 
-def transform_single_block(
+def transform_single_block_with_split(
     idx: int,
     reduction_infos: CascadedGroupInfo,
     reduce_funcs_list: list[tuple[BMat | None, BMat | None, BMat | None]],
-    pro_ep_map: dict
+    pro_ep_map: dict,
+    num_split: Optional[int]
 ):
+    # 这个函数默认num_split>0,所以后面不会做num_split相关的判断
+    assert num_split is not None and num_split > 0
+
     # 好像只需要替换嵌套For下面最小的那个block,但是分配的buffer需要在最大的block上添加才行
     sch = reduction_infos.sch
     block_info = reduction_infos.cascaded_group[idx]
@@ -41,7 +47,10 @@ def transform_single_block(
     # 在这里得到所有的循环变量(block.iter_vars[x].var),后续在该block内生成的所有BufferLoad和BufferStore都应该使用这里的索引变量
     # 实现方式是:要产生的Load或者Store,会得到其对应的indices的字符串,再由一个dict映射得到该Block内的索引变量
     # 这是否是一个糟糕的设计?(这要求几乎所有Block的索引变量都是有意义的,尽管我们在te表达式中已经在强调这一点)
+    # 注:这个map的value的类型是tvm.tir.Var,iv的类型是tvm.tir.IterVar
     iter_vars_map = {iv.var.name : iv.var for iv in block.iter_vars}
+    # 手动添加split变量(还是等后面的loop构造出来之后再加?)
+    iter_vars_map["v_split"] = tvm.tir.Var("v_split", "int32")
 
     # 传入某一个BufferLoad或者BufferStore的indices,将其转换成全部由该Block的iter_vars_map的indices数组
     # 如果转换出来前后的长度不对,那错误应该在外部产生
@@ -210,43 +219,8 @@ def transform_single_block(
             也即replaced_reduce_func允许至多一个T.Cast
 
         2. 对于非GEMM op,期望得到的replaced_reduce_func中不存在显式的T.Cast,也即可以直接用ori_reduce_func来构造输入
-
-        3. 对于topk op,ori_reduce_func会是x0
-           - 如果输入是fp16,需要创建input buffer并插入Cast转fp32
-           - 如果输入已经是fp32,可以直接使用
-           这个Cast的变换因为是专门针对topk的,所以写的并不通用
     """
-    if reduction_config.reduce_op == "topk":
-        input_load = ori_reduce_func
-        input_dtype = input_load.dtype
-
-        # 检查是否需要类型转换
-        if input_dtype != "float32":
-            input_buffer = tir.decl_buffer(
-                shape=input_load.buffer.shape,
-                dtype="float32",
-                name=f"input_{idx}_0" # 这里最后写死"_0"没有问题,因为只有这一个输入
-            )
-
-            input_indices = _indices_to_indices(input_load.indices)
-            input_buffer_stmt = tir.BufferStore(
-                buffer=input_buffer,
-                value=tir.Cast("float32", tir.BufferLoad(input_load.buffer, input_indices)),
-                indices=input_indices
-            )
-
-            input_buffers.append(input_buffer)
-            input_buffer_stmts.append(input_buffer_stmt)
-
-            # topk x0是fp16的时候这里需要自己提前换掉
-            sub_reduce_funcs = []
-            replaced_reduce_func = tir.BufferLoad(input_buffer, input_indices)
-        else:
-            # 输入已经是 fp32，直接使用
-            sub_reduce_funcs = []
-            replaced_reduce_func = ori_reduce_func
-        # topk里面的sub_reduce_funcs=[]是为了跳掉下面的循环
-    elif block_info.is_gemm():
+    if block_info.is_gemm():
         assert isinstance(ori_reduce_func, tir.Mul)
 
         ori_reduce_funcs = [ori_reduce_func.a, ori_reduce_func.b]
@@ -277,10 +251,7 @@ def transform_single_block(
         sub_reduce_funcs = [ori_reduce_func]
 
     # BAD NAME!
-    # 非topk op,初始化replaced_reduce_func
-    if reduction_config.reduce_op != "topk":
-        replaced_reduce_func = ori_reduce_func
-
+    replaced_reduce_func = ori_reduce_func
     for sub_idx, sub_reduce_func in enumerate(sub_reduce_funcs):
         sub_reduce_func_loads = []
         tir.stmt_functor.post_order_visit(sub_reduce_func, _collect_sub_func_loads)
@@ -349,141 +320,31 @@ def transform_single_block(
             a=tir.BufferLoad(reduce_target_buffer, _indices_to_indices(reduce_target_buffer_load.indices)),
             b=replaced_reduce_func
         )
-        do_reduce_stmt = tir.BufferStore(
-            buffer=reduce_target_buffer,
-            value=do_reduce_value,
-            indices=_indices_to_indices(reduce_target_buffer_load.indices)
-        )
     elif reduction_config.reduce_op == "max":
         do_reduce_value = tir.Max(
             a=tir.BufferLoad(reduce_target_buffer, _indices_to_indices(reduce_target_buffer_load.indices)),
             b=replaced_reduce_func
         )
-        do_reduce_stmt = tir.BufferStore(
-            buffer=reduce_target_buffer,
-            value=do_reduce_value,
-            indices=_indices_to_indices(reduce_target_buffer_load.indices)
-        )
-    elif reduction_config.reduce_op == "topk":
-        # topk使用vec_reduce call
-        # 从op_params获取参数
-        op_params = reduction_infos.op_params.get(reduction_config.reduce_target, {})
-        num_topk = op_params.get("num_topk", 8)
-        axis = op_params.get("axis", -1)
-
-        # 获取indices buffer
-        # 从block.writes中找到indices buffer
-        indices_buffer = None
-        for write_region in block.writes:
-            if write_region.buffer != reduce_target_buffer:
-                indices_buffer = write_region.buffer
-                break
-
-        # topk indices可能包含 Ramp(如 0:8)
-        # 将indices中的Var替换为block的iter_var
-        def _convert_indices(indices):
-            result = []
-            for idx in indices:
-                if isinstance(idx, tir.Var):
-                    result.append(iter_vars_map.get(idx.name, idx))
-                elif isinstance(idx, tir.Ramp):
-                    # Ramp的base可能是Var
-                    new_base = idx.base
-                    if isinstance(idx.base, tir.Var):
-                        new_base = iter_vars_map.get(idx.base.name, idx.base)
-                    result.append(tir.Ramp(new_base, idx.stride, idx.lanes))
-                else:
-                    result.append(idx)
-            return result
-
-        values_indices = _convert_indices(reduce_target_buffer_load.indices)
-        indices_indices = _convert_indices(reduce_target_buffer_load.indices) if indices_buffer else None
-
-        # 构造 vec_reduce call
-        # vec_reduce("topk", num_topk, axis, input, values, indices, reduce_var)
-        reduce_var = [iv.var for iv in block.iter_vars if iv.iter_type == 2][0]  # CommReduce = 2
-        do_reduce_stmt = tir.Evaluate(
-            tir.call_intrin(
-                "handle",
-                "tir.vec_reduce",
-                "topk",
-                num_topk,
-                axis,
-                replaced_reduce_func,  # input
-                tir.BufferLoad(reduce_target_buffer, values_indices),
-                tir.BufferLoad(indices_buffer, indices_indices) if indices_buffer else None,
-                reduce_var
-            )
-        )
+    do_reduce_stmt = tir.BufferStore(
+        buffer=reduce_target_buffer,
+        value=do_reduce_value,
+        indices=_indices_to_indices(reduce_target_buffer_load.indices)
+    )
 
     # 处理init,reads/writes相关
     # 对reduce_target进行初始化
     if reduction_config.reduce_op == "+":
         init_value = tir.FloatImm(reduce_target_buffer.dtype, 0.0)
-        init = tir.BufferStore(
-            buffer=reduce_target_buffer,
-            value=init_value,
-            indices=_indices_to_indices(reduce_target_buffer_load.indices)
-        )
     elif reduction_config.reduce_op == "max":
         # init_value = -tir.infinity(dtype=reduce_target_buffer.dtype)
         # 用一个较大的负数代替负无穷
         init_value = tir.FloatImm(reduce_target_buffer.dtype, -1e6)
-        init = tir.BufferStore(
-            buffer=reduce_target_buffer,
-            value=init_value,
-            indices=_indices_to_indices(reduce_target_buffer_load.indices)
-        )
-    elif reduction_config.reduce_op == "topk":
-        # FIXME(liyangcheng): 特化了topk之后的代码都不那么通用了...
 
-        # topk需要初始化两个buffer:values和indices
-        op_params = reduction_infos.op_params.get(reduction_config.reduce_target, {})
-        num_topk = op_params.get("num_topk", 8)
-
-        # topk indices可能包含 Ramp(如 0:8)
-        # 将indices中的Var替换为block的iter_var
-        def _convert_indices_for_init(indices):
-            result = []
-            for idx in indices:
-                if isinstance(idx, tir.Var):
-                    result.append(iter_vars_map.get(idx.name, idx))
-                elif isinstance(idx, tir.Ramp):
-                    # Ramp的base可能是Var
-                    new_base = idx.base
-                    if isinstance(idx.base, tir.Var):
-                        new_base = iter_vars_map.get(idx.base.name, idx.base)
-                    result.append(tir.Ramp(new_base, idx.stride, idx.lanes))
-                else:
-                    result.append(idx)
-            return result
-
-        values_indices = _convert_indices_for_init(reduce_target_buffer_load.indices)
-
-        # values buffer 初始化为 -1ee
-        values_init = tir.BufferStore(
-            buffer=reduce_target_buffer,
-            value=tir.Broadcast(tir.FloatImm(reduce_target_buffer.dtype, -1e5), num_topk),
-            indices=values_indices
-        )
-
-        # indices buffer 初始化为 -1
-        # 从 block.writes 中找到 indices buffer
-        indices_buffer = None
-        for write_region in block.writes:
-            if write_region.buffer != reduce_target_buffer:
-                indices_buffer = write_region.buffer
-                break
-
-        if indices_buffer:
-            indices_init = tir.BufferStore(
-                buffer=indices_buffer,
-                value=tir.Broadcast(tir.IntImm(indices_buffer.dtype, -1), num_topk),
-                indices=values_indices
-            )
-            init = tir.SeqStmt([values_init, indices_init])
-        else:
-            init = values_init
+    init = tir.BufferStore(
+        buffer=reduce_target_buffer,
+        value=init_value,
+        indices=_indices_to_indices(reduce_target_buffer_load.indices)
+    )
 
     # stmts
     stmts = []
@@ -494,25 +355,19 @@ def transform_single_block(
     if need_cal_rescale_factor:
         stmts.append(rescale_factor_stmt)
         extra_allocates.append(rescale_factor_buffer)
-    stmts.extend(input_buffer_stmts)
-    extra_allocates.extend(input_buffers)
+    stmts.append(*input_buffer_stmts)
+    extra_allocates.append(*input_buffers)
     if need_cal_rescale_factor:
         stmts.append(do_rescale_stmt)
     stmts.append(do_reduce_stmt)
 
     # 产生待替换的block(没有reads/writes)
-    # 处理body:如果只有一个stmt,直接使用它;否则使用SeqStmt
-    if len(stmts) == 1:
-        body = stmts[0]
-    else:
-        body = tir.SeqStmt(stmts)
-
     tmp_block = tir.Block(
         iter_vars=block.iter_vars,
         reads=[],
         writes=[],
         name_hint=f"reduction{idx}",
-        body=body,
+        body=tir.SeqStmt(stmts),
         init=init
     )
 
@@ -523,13 +378,10 @@ def transform_single_block(
         if isinstance(e, (tir.BufferLoad, tir.BufferStore)):
             buffer_var_map[e.buffer.data] = e.buffer
 
-    # 遍历body中的所有stmt
-    if isinstance(tmp_block.body, tir.SeqStmt):
-        for stmt in tmp_block.body:
-            tir.stmt_functor.post_order_visit(stmt, _collect_buffer_var_map)
-    else:
-        # 单个stmt
-        tir.stmt_functor.post_order_visit(tmp_block.body, _collect_buffer_var_map)
+    # 这样来获取reads/writes就需要先把tmp_block生成出来才行,有没有更好的办法?
+    # tmp_block.body应该一定是seqstmt(因为至少有input和do_reduce)
+    for stmt in tmp_block.body:
+        tir.stmt_functor.post_order_visit(stmt, _collect_buffer_var_map)
 
     reads_writes = tir.analysis.get_block_read_write_region(tmp_block, buffer_var_map)
 
@@ -580,10 +432,13 @@ def transform_single_block(
     return new_block, extra_allocates
 
 
-def transform_reductions(
+def transform_reductions_with_split(
     reduction_infos: CascadedGroupInfo,
-    reduce_funcs_list: list[tuple[BMat | None, BMat | None, BMat | None]]
+    reduce_funcs_list: list[tuple[BMat | None, BMat | None, BMat | None]],
+    num_split: Optional[int]
 ):
+    
+    assert num_split is not None and num_split > 0
 
     assert len(reduction_infos.reduction_configs) == len(reduce_funcs_list)
 
@@ -597,14 +452,16 @@ def transform_reductions(
     pro_ep_map = {}
 
     # 循环每个要transform的block,得到新的block,额外分配的buffer并更新pro_ep_map
+    # 在合适的位置插入split维度
     for idx in range(n):
-        new_block, extra_allocates = transform_single_block(
+        new_block, extra_allocates = transform_single_block_with_split(
             idx,
             reduction_infos,
             reduce_funcs_list,
-            pro_ep_map
+            pro_ep_map,
+            num_split
         )
-
+        
         new_blocks.append(new_block)
         extra_alloc_buffers.extend(extra_allocates)
 

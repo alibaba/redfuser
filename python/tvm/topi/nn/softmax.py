@@ -195,7 +195,7 @@ def softmax_split(x, axis=-1, reduce_max_name="k", reduce_sum_name="k", varargs_
 
     def _compute_max(*indices):
         eval_range = insert_reduce_index(indices, k1)
-        return tvm.te.max(x[eval_range], axis=k1)
+        return tvm.te.max(x[eval_range].astype("float32"), axis=k1) # FIXME(liyangcheng): dtype issue
 
     def _compute_exp(max_elem, *indices):
         non_reduce_indices = get_non_reduce_indices(indices)
@@ -214,9 +214,9 @@ def softmax_split(x, axis=-1, reduce_max_name="k", reduce_sum_name="k", varargs_
 
     exp = te.compute(
         shape, lambda *indices: _compute_exp(max_elem, *indices), name="T_softmax_exp"
-    )
+    ) # 这里不需要varargs_names的原因是exp的计算不涉及规约,可以在inline的时候被融合消除掉
     expsum = te.compute(
         reduced_shape, lambda *indices: _compute_expsum(exp, *indices), name="T_softmax_expsum", varargs_names=varargs_names
     )
 
-    return exp, expsum
+    return max_elem, exp, expsum

@@ -205,7 +205,7 @@ def topk(data, k=1, axis=-1, ret_type="both", is_ascend=False, dtype="int64"):
     return out
 
 
-def tir_reduce_topk(data, k=1, axis=-1):
+def tir_reduce_topk(data, k=1, axis=-1, reduce_topk_name="k", varargs_names=None):
     """Get the top k elements in an input tensor along the given axis. This is just a declaration of the builtin function.
 
     Parameters
@@ -224,18 +224,85 @@ def tir_reduce_topk(data, k=1, axis=-1):
     out : tvm.te.Tensor or List[tvm.te.Tensor]
         The computed result.
     """
-    buffer_to_tl_region = tvm.get_global_func("tir.Buffer2TL_Region")
-    def __call_intrin(ins, outs):
-        return tvm.tir.call_intrin("handle", tvm.tir.op.Op.get("tir.reduce_topk"), buffer_to_tl_region(ins[0]), buffer_to_tl_region(outs[0]), buffer_to_tl_region(outs[1]), k, axis)
-    
-    out_shape = list(get_const_tuple(data.shape))
+
     assert isinstance(k, int) and k >= 1
-    out_shape[axis] = k
+
+    out_shape = list(get_const_tuple(data.shape))
+    ndim = len(out_shape)
+    real_axis = axis if axis >= 0 else axis + ndim
+    out_shape[real_axis] = k
+
+    if varargs_names is not None:
+        assert len(varargs_names) == ndim - 1
+        varargs_names.insert(real_axis, None) # real_axis这个索引不会被索引到(因为会变成"k"),但是这里要把varargs_names补齐,类似这种case: m, k, n -> SRS
+
     out_bufs = [
-        tvm.tir.decl_buffer(out_shape, data.dtype, "value_buf"),
-        tvm.tir.decl_buffer(out_shape, "int32", "indices_buf")
+        tvm.tir.decl_buffer(out_shape, "float32", "T_topk_elem"), # FIXME(liyangcheng): dtype issue
+        tvm.tir.decl_buffer(out_shape, "int32", "T_topk_indices")
     ]
     out_shapes = [out_shape, out_shape]
+
+    # Build the full shape of the reduce axis
+    reduce_extent = get_const_tuple(data.shape)[real_axis]
+
+    def __call_intrin(ins, outs):
+        ib = tvm.tir.ir_builder.create()
+        data_buf = ins[0]       # Buffer with full shape, e.g. [M, K]
+        values_buf = outs[0]    # Buffer with output shape, e.g. [M, k]
+        indices_buf = outs[1]   # Buffer with output shape, e.g. [M, k]
+
+        # Build loops over all axes except the reduce axis
+        # For the common 2D case: outer dims are all dims except real_axis
+        shape = data_buf.shape
+
+        def _build_loops(dim, loop_vars):
+            if dim == ndim:
+                # All loops built; now build the reduce loop
+                k_var = tvm.tir.Var(reduce_topk_name, "int32")
+                # Construct indices for data_buf: replace real_axis with k_var
+                data_indices = list(loop_vars)
+                data_indices[real_axis] = k_var
+                # Construct indices for values/indices buf: replace real_axis with Ramp(0,1,k)
+                out_indices = list(loop_vars)
+                out_indices[real_axis] = tvm.tir.Ramp(tvm.tir.const(0, "int32"), tvm.tir.const(1, "int32"), k)
+
+                stmt = tvm.tir.For(
+                    k_var, tvm.tir.const(0, "int32"), tvm.tir.const(reduce_extent, "int32"),
+                    tvm.tir.ForKind.SERIAL,
+                    tvm.tir.Evaluate(tvm.tir.call_intrin(
+                        "handle",
+                        tvm.tir.op.Op.get("tir.vec_reduce"),
+                        "topk",
+                        k,
+                        axis,
+                        tvm.tir.BufferLoad(data_buf, data_indices),
+                        tvm.tir.BufferLoad(values_buf, out_indices),
+                        tvm.tir.BufferLoad(indices_buf, out_indices),
+                        k_var,
+                    ))
+                )
+                return stmt
+            else:
+                if dim == real_axis:
+                    # Skip real_axis here; it becomes the reduce loop variable
+                    loop_vars.append(None)
+                    inner = _build_loops(dim + 1, loop_vars)
+                    loop_vars.pop()
+                    return inner
+                else:
+                    outer_var = tvm.tir.Var(f"{varargs_names[dim] if varargs_names is not None else f'i{dim}'}", "int32") # len(varargs_name) == (ndim-1)+1,如果外面传对的话,这里应该不会出现索引的问题
+                    loop_vars.append(outer_var)
+                    inner = _build_loops(dim + 1, loop_vars)
+                    loop_vars.pop()
+                    return tvm.tir.For(
+                        outer_var, tvm.tir.const(0, "int32"), shape[dim],
+                        tvm.tir.ForKind.SERIAL,
+                        inner
+                    )
+
+        body = _build_loops(0, [])
+        ib.emit(body)
+        return ib.get()
 
     out = te.extern(
         out_shapes,
@@ -245,4 +312,5 @@ def tir_reduce_topk(data, k=1, axis=-1):
         name="tir_reduce_topk",
         tag="tir_reduce_topk"
     )
+
     return out

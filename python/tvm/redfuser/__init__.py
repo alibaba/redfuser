@@ -11,6 +11,7 @@ from .transform.bind_blockIdx_pass import BindBlockIdx
 from .transform.move_alloc_buffer_pass import MoveAllocBuffer
 from .transform.gemm_dtype_unify_pass import UnifyGemmDtype
 from .transform.generate_online_expr_pass import GenerateOnlineExpr
+from .transform.promote_extern_reduction_pass import PromoteExternReduction
 
 __all__ = [
     "DecomposeReduction",
@@ -26,4 +27,5 @@ __all__ = [
     "MoveAllocBuffer",
     "UnifyGemmDtype",
     "GenerateOnlineExpr",
+    "PromoteExternReduction",
 ]

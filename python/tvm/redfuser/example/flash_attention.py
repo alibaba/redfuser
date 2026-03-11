@@ -27,7 +27,7 @@ def redfuser_flash_attention(q, k, v, dtype, accum_dtype):
     # s.shape = [bs, hn, ql, kvl]
     s = topi.nn.matmul(q, k, transpose_b=True, out_dtype=accum_dtype, reduce_axis_name="head_dim_qk", varargs_names=["batch", "head_num", "q_len", "kv_len"])
     # exp.shape = [bs, hn, ql, kvl], exp_sum.shape = [bs, hn, ql]
-    exp, exp_sum = topi.nn.softmax_split(topi.multiply(s, scale), reduce_max_name="kv_len", reduce_sum_name="kv_len", varargs_names=["batch", "head_num", "q_len"])
+    _, exp, exp_sum = topi.nn.softmax_split(topi.multiply(s, scale), reduce_max_name="kv_len", reduce_sum_name="kv_len", varargs_names=["batch", "head_num", "q_len"])
     # o.shape = [bs, hn, ql, hd]
     o = topi.nn.matmul(exp.astype(dtype), v, out_dtype=accum_dtype, reduce_axis_name="kv_len", varargs_names=["batch", "head_num", "q_len", "head_dim_v"])
     o_norm = te.compute(o.shape, lambda *indices: o(*indices) / exp_sum(*indices[:-1]), name="T_softmax_norm", varargs_names=["batch", "head_num", "q_len", "head_dim_v"])
@@ -45,7 +45,7 @@ def main(func_name, tile_map):
 
     passes = tvm.transform.Sequential([
         # generate online expr
-        GenerateOnlineExpr,
+        GenerateOnlineExpr(),
         # tiling
         UnifyBindOuterLoops,
         TileByAnnotation(tile_map),

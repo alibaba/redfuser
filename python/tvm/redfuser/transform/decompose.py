@@ -17,6 +17,7 @@ class ReductionProcessor:
         self.fixed_x_syms = dict()
         self.fixed_y_syms = dict()
         self.prev_y_syms = dict()
+        self.op_params = {}  # 存储可能的额外参数 {reduce_target: {...}}
         self._parse_config()
 
     def process_reductions(self) -> tuple[list[tuple[BMat, BMat, str | None]], list[tuple[BMat | None, BMat | None, BMat | None]]]:
@@ -115,13 +116,14 @@ class ReductionProcessor:
         return (G_expr, H_expr, prev_H_expr)
 
     def _parse_config(self):
-        local = {"BMat": BMat, "max": sp.Max, "abs": sp.Abs, "fabs": sp.Abs}
+        local = {"BMat": BMat, "max": sp.Max, "abs": sp.Abs, "fabs": sp.Abs, "topk": TopK} # 这里虽然写了topk,但实际并没有用
         for c in self.c_map.keys():
             self.c_syms[c] = sp.Symbol(c, real=True, positive=True)
         for x in self.x_map.keys():
             self.x_syms[x] = BMat(sp.MatrixSymbol(x, BMat_M, BMat_N))
             self.fixed_x_syms[self.x_syms[x]] = BMat(sp.MatrixSymbol(f"{x}_fixed", BMat_M, BMat_N))
         for config in self.configs:
+            # 注: topk的reduce_func在这里是x0,在当前的case里是能work的
             F_expr = BMat(sp.sympify(config.reduce_func, locals=local | self.x_syms | self.y_syms | self.c_syms))
             if self.y_syms.get(config.reduce_target, None) is None:
                 shape = (BMat_M, BMat_N) if config.reduce_op == '+' and isinstance(strip_bmat(F_expr), sp.MatMul) else (BMat_M, 1)
