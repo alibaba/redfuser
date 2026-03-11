@@ -89,41 +89,42 @@ def redfuser_moe_routing():
             A_1 = T.alloc_fragment([128, 128], "float16")
             values_1 = T.alloc_fragment([128, 8], "float16")
             indices_1 = T.alloc_fragment([128, 8], "int32")
-            input0 = T.alloc_fragment([128, 128], "float32")
-            max_elem = T.alloc_fragment([128], "float32")
-            prev_max_elem = T.alloc_fragment([128], "float32")
-            input1 = T.alloc_fragment([128, 128], "float32")
             topk_elem = T.alloc_fragment([128, 8], "float32")
             topk_indices = T.alloc_fragment([128, 8], "int32")
+            softmax_maxelem = T.alloc_fragment([128], "float32")
+            softmax_expsum = T.alloc_fragment([128], "float32")
+            input_0_0 = T.alloc_fragment([128, 128], "float32")
+            prev_softmax_maxelem = T.alloc_fragment([128], "float32")
+            input_1_0 = T.alloc_fragment([128, 128], "float32")
             rescale_factor_2 = T.alloc_fragment([128], "float32")
-            input2 = T.alloc_fragment([128, 128], "float32")
-            exp_sum = T.alloc_fragment([128], "float32")
-            T.fill(max_elem[0:128], -100000.0)
+            input_2_0 = T.alloc_fragment([128, 128], "float32")
             T.fill(topk_elem[0:128, 0:8], -100000.0)
             T.fill(topk_indices[0:128, 0:8], -1)
-            T.fill(exp_sum[0:128], 0.0)
+            T.fill(softmax_maxelem[0:128], -1000000.0)
+            T.fill(softmax_expsum[0:128], 0.0)
             for v_k_o in T.Pipelined(0, 32, num_stages=1):
                 T.copy(A[v_m_o * 128:v_m_o * 128 + 128, v_k_o * 128:v_k_o * 128 + 128], A_1[0:128, 0:128])
-                T.copy(max_elem[0:128], prev_max_elem[0:128])
                 for m_1, k_1 in T.Parallel(128, 128):
-                    input0[m_1, k_1] = T.Cast("float32", A_1[m_1, k_1])
-                T.reduce(input0, max_elem, "max", 1, False)
+                    input_0_0[m_1, k_1] = T.Cast("float32", A_1[m_1, k_1])
+                reduce_topk(input_0_0, topk_elem, topk_indices, 8, -1, v_k_o * 128)
+                T.copy(softmax_maxelem[0:128], prev_softmax_maxelem[0:128])
                 for m_1, k_1 in T.Parallel(128, 128):
-                    input1[m_1, k_1] = T.Cast("float32", A_1[m_1, k_1])
-                reduce_topk(input1, topk_elem, topk_indices, 8, -1, v_k_o * 128)
+                    input_1_0[m_1, k_1] = T.Cast("float32", A_1[m_1, k_1])
+                T.reduce(input_1_0, softmax_maxelem, "max", 1, False)
                 for m_1 in T.Parallel(128):
-                    rescale_factor_2[m_1] = T.exp(-1.0 * max_elem[m_1] + prev_max_elem[m_1])
+                    rescale_factor_2[m_1] = T.exp(-1.0 * softmax_maxelem[m_1] + prev_softmax_maxelem[m_1])
                 for m_1, k_1 in T.Parallel(128, 128):
-                    input2[m_1, k_1] = T.exp(T.Cast("float32", A_1[m_1, k_1]) - max_elem[m_1])
+                    input_2_0[m_1, k_1] = T.exp(T.Cast("float32", A_1[m_1, k_1]) - softmax_maxelem[m_1])
                 for m_1 in T.Parallel(128):
-                    exp_sum[m_1] = exp_sum[m_1] * rescale_factor_2[m_1]
-                T.reduce(input2, exp_sum, "sum", 1, False)
-            for v_k_o_1 in T.Pipelined(0, 8, num_stages=1):
+                    softmax_expsum[m_1] = softmax_expsum[m_1] * rescale_factor_2[m_1]
+                T.reduce(input_2_0, softmax_expsum, "sum", 1, False)
+            for v_topk_o in T.Pipelined(0, 8, num_stages=1):
                 for m_1_1 in T.Parallel(128):
-                    values_1[m_1_1, v_k_o_1] = T.Cast("float16", T.exp(topk_elem[m_1_1, v_k_o_1] - max_elem[m_1_1]) / exp_sum[m_1_1])
-                T.copy(topk_indices[0:128, v_k_o_1:v_k_o_1 + 1], indices_1[0:128, v_k_o_1:v_k_o_1 + 1])
-                T.copy(values_1[0:128, v_k_o_1:v_k_o_1 + 1], values[v_m_o * 128:v_m_o * 128 + 128, v_k_o_1:v_k_o_1 + 1])
-                T.copy(indices_1[0:128, v_k_o_1:v_k_o_1 + 1], indices[v_m_o * 128:v_m_o * 128 + 128, v_k_o_1:v_k_o_1 + 1])
+                    values_1[m_1_1, v_topk_o] = T.Cast("float16", T.exp(topk_elem[m_1_1, v_topk_o] - softmax_maxelem[m_1_1]) / softmax_expsum[m_1_1])
+                T.copy(values_1[0:128, v_topk_o:v_topk_o + 1], values[v_m_o * 128:v_m_o * 128 + 128, v_topk_o:v_topk_o + 1])
+            for v_topk_o_1 in T.Pipelined(0, 8, num_stages=1):
+                T.copy(topk_indices[0:128, v_topk_o_1:v_topk_o_1 + 1], indices_1[0:128, v_topk_o_1:v_topk_o_1 + 1])
+                T.copy(indices_1[0:128, v_topk_o_1:v_topk_o_1 + 1], indices[v_m_o * 128:v_m_o * 128 + 128, v_topk_o_1:v_topk_o_1 + 1])
 
     return kernel
 
