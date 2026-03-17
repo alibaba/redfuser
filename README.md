@@ -11,15 +11,16 @@ RedFuser is a novel framework for optimizing cascaded reductions in deep learnin
 
 ## Update
 
+- \[2026-03\]: Support Flash Decoding, Moe Routing and Quant GEMM examples.
 - \[2026-01\]: RedFuser is now avaliable with flash-attention example.
-- \[2025-11\]: 🎉RedFuser is accepted by ASPLOS 2026!
+- \[2025-11\]: 🎉 RedFuser is accepted by ASPLOS 2026!
 
 ## Roadmap
 
 - [x] flash-attention
-- [ ] flash-decoding
-- [ ] moe-routing
-- [ ] fp8 quant+gemm
+- [x] flash-decoding
+- [x] moe-routing
+- [x] fp8 quant+gemm
 
 ## Getting Started
 
@@ -37,6 +38,20 @@ redfuser/
 │   ├── transform/             # Core transformation passes
 │   └── example/               # Example workloads
 │ ...
+```
+
+## Citation
+
+If you use RedFuser in your research, please cite our paper:
+
+```bibtex
+@article{RedFuser,
+  title={RedFuser: An Automatic Operator Fusion Framework for Cascaded Reductions on AI Accelerators},
+  author={Xinsheng Tang and Yangchen Li and Nan Wang and Zhiyi Shu and Xingyu Ling and Junna Xing and Peng Zhou and Qiang Liu},
+  journal={Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2},
+  year={2026},
+  url={https://arxiv.org/abs/2603.10026}
+}
 ```
 
 ## License
