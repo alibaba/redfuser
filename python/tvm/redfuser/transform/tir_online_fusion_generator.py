@@ -460,10 +460,10 @@ def transform_single_block(
 
         values_indices = _convert_indices_for_init(reduce_target_buffer_load.indices)
 
-        # values buffer 初始化为 -1ee
+        # values buffer 初始化为 -1e6
         values_init = tir.BufferStore(
             buffer=reduce_target_buffer,
-            value=tir.Broadcast(tir.FloatImm(reduce_target_buffer.dtype, -1e5), num_topk),
+            value=tir.Broadcast(tir.FloatImm(reduce_target_buffer.dtype, -1e6), num_topk),
             indices=values_indices
         )
 

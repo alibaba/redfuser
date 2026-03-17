@@ -16,8 +16,6 @@ def test_moe_routing():
     ref_output_values, ref_output_indices = ref_program(logits, top_k)
     torch.testing.assert_close(output_values, ref_output_values)
     # torch.testing.assert_close(output_indices, ref_output_indices)
-    print(f"{output_indices=}")
-    print(f"{ref_output_indices=}")
     print("All checks passed.✅")
 
 if __name__ == "__main__":

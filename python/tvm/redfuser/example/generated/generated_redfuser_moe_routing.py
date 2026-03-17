@@ -98,7 +98,7 @@ def redfuser_moe_routing():
             input_1_0 = T.alloc_fragment([128, 128], "float32")
             rescale_factor_2 = T.alloc_fragment([128], "float32")
             input_2_0 = T.alloc_fragment([128, 128], "float32")
-            T.fill(topk_elem[0:128, 0:8], -100000.0)
+            T.fill(topk_elem[0:128, 0:8], -1000000.0)
             T.fill(topk_indices[0:128, 0:8], -1)
             T.fill(softmax_maxelem[0:128], -1000000.0)
             T.fill(softmax_expsum[0:128], 0.0)
