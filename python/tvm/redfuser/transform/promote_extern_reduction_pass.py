@@ -125,7 +125,7 @@ def _process_tir_reduce_topk_block(block: Block) -> Optional[Stmt]:
         if dtype == "int32":
             init_val = tvm.tir.const(-1, "int32")
         else:
-            init_val = tvm.tir.const(-1e5, dtype)
+            init_val = tvm.tir.const(-1e6, dtype)
         broadcast = Broadcast(init_val, num_topk)
         init_store = BufferStore(out_load.buffer, broadcast, remapped_indices)
         init_stmts.append(init_store)

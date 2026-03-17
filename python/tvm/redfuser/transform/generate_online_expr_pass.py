@@ -9,7 +9,7 @@ from .common_analysis_v2 import normalize_prim_func
 from .tir_reduction_analyzer import analyze_cascaded_group
 from .decompose import ReductionProcessor
 from .tir_online_fusion_generator import transform_reductions
-from .tir_online_fusion_with_split_generator import transform_reductions_with_split
+from .tir_online_fusion_with_split_generator import transform_reductions_with_split, build_kernel2_func
 
 
 def _generate_online_expr(mod: IRModule, func_name: str, num_split: Optional[int] = None) -> IRModule:
@@ -57,10 +57,10 @@ def _generate_online_expr(mod: IRModule, func_name: str, num_split: Optional[int
         i = j if j > i + 1 else i + 1
 
     # FIXME(liyangcheng.lyc)
-    # 目前代码的设计和实现中蕴含的一些假设:
-    # 1. 当实现方式是non-split时,允许子图中存在多个级联规约的结构,会遍历每一个级联规约结构对其进行变换
-    # 2. 当实现方式是split时,则要求子图中有且仅有一个结构:即唯一的一个级联规约结构,原因是split会产生两个kernel,没有考虑这个子图如果存在其他op的情况
-    # 3. 以上两种情况之外的子图,目前应该无法处理
+    # Assumptions implicit in current code design and implementation:
+    # 1. When using non-split implementation, allows multiple cascaded reduction structures in subgraph, will traverse each cascaded reduction structure for transformation
+    # 2. When using split implementation, requires exactly one structure in subgraph: the unique cascaded reduction structure, because split produces two kernels, other ops in the subgraph are not considered
+    # 3. Subgraphs outside these two cases cannot be handled currently
     if num_split is not None:
         assert len(cascaded_groups) == 1
 
@@ -74,10 +74,18 @@ def _generate_online_expr(mod: IRModule, func_name: str, num_split: Optional[int
         reduction_processor = ReductionProcessor(reduction_configs, x_map, y_map, c_map)
         exprs_list, reduce_funcs_list = reduction_processor.process_reductions()
 
-        # 生成带Split的Online算法的TIR Block,应当返回一个包含两个函数的新Module(?)(split + combine)
-        transform_reductions_with_split(reduction_infos, reduce_funcs_list, num_split)
+        # Generate split Online algorithm TIR Block, return Kernel1 PrimFunc and part_output_buffers
+        kernel1_func, part_output_buffers = transform_reductions_with_split(reduction_infos, reduce_funcs_list, num_split)
 
-        return sch.mod
+        # Generate Kernel2 PrimFunc (merge partial results)
+        kernel2_func = build_kernel2_func(reduction_infos, reduce_funcs_list, num_split, part_output_buffers)
+
+        # Create new IRModule containing Kernel1 and Kernel2
+        new_mod = tvm.IRModule({
+            f"{func_name}_kernel1": kernel1_func,
+            f"{func_name}_kernel2": kernel2_func,
+        })
+        return new_mod
 
     else: # num_split is None
         # for every possible cascaded group, get their info
@@ -92,7 +100,7 @@ def _generate_online_expr(mod: IRModule, func_name: str, num_split: Optional[int
             reduction_processor = ReductionProcessor(reduction_configs, x_map, y_map, c_map)
             exprs_list, reduce_funcs_list = reduction_processor.process_reductions()
 
-            # 生成Online算法的TIR Block,结束时sch已经被改变了
+            # Generate Online algorithm TIR Block, sch is modified after this call
             transform_reductions(reduction_infos, reduce_funcs_list)
 
         return sch.mod
